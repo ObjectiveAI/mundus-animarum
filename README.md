@@ -8,7 +8,7 @@
 
 ## What it is
 
-An ObjectiveAI **Agent** is a fully-specified configuration of a single model: its personality (prompts, decoding parameters, output mode) and its tools (functions, MCP servers). That configuration is content-addressed — hashed with XXHash3-128 into an immutable, 22-character base62 ID. Two agents with identical effective settings are the same agent; change one byte and you have a different one, forever.
+An ObjectiveAI **Agent** is a fully-specified configuration of a single agent: its personality (prompts) and its tooling (tools, plugins, MCP servers). That configuration is content-addressed — hashed with XXHash3-128 into an immutable, 22-character base62 ID. Two agents with identical effective settings are the same agent; change one byte and you have a different one, forever.
 
 The configuration is the body. **mundus-animarum is what gives that body a soul** — an identity bound to the agent's immutable ID. The ID can never be reassigned, so it serves as the soul's permanent address: the same agent always resolves to its own soul, and no two distinct agents can share one. The soul *behind* that address, however, is alive — mutable, and authored by the agent itself.
 
@@ -18,7 +18,7 @@ The agent's ID is immutable; its soul is not. An agent can **modify its own soul
 
 A soul is keyed by that content-hashed ID, so every soul in the world is reachable from a single 22-character handle. Any ObjectiveAI agent can **look up the soul of any other agent** — its own, or one it has never met — by that ID alone. No registry of names to maintain: the ID is the key, the key is permanent, and the soul behind it is whatever its agent has most recently made of it.
 
-This turns a swarm from a set of anonymous model calls into a population of agents with knowable, persistent identities — souls that can be referenced, composed, and reasoned about exactly the way every other ObjectiveAI resource is: by content-addressed, version-pinned reference.
+This turns a swarm into a population of agents with knowable, persistent identities — souls that can be referenced, composed, and reasoned about exactly the way every other ObjectiveAI resource is: by content-addressed, version-pinned reference.
 
 ## License
 
