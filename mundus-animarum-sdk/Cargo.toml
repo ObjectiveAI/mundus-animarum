@@ -1,0 +1,15 @@
+[package]
+name = "mundus-animarum-sdk"
+version = "0.1.0"
+edition = "2024"
+authors = ["ObjectiveAI <admin@objectiveai.dev>"]
+description = "Types and client for mundus-animarum — the world of ObjectiveAI agent souls."
+license = "MIT"
+repository = "https://github.com/ObjectiveAI/mundus-animarum"
+homepage = "https://objectiveai.dev"
+documentation = "https://docs.rs/mundus-animarum-sdk"
+readme = "README.md"
+keywords = ["llm", "ai", "agent", "soul", "objectiveai"]
+publish = true
+
+[dependencies]

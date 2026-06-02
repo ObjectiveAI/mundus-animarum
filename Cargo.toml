@@ -1,0 +1,7 @@
+[workspace]
+resolver = "3"
+members = [
+    "mundus-animarum-sdk",
+    "mundus-animarum-cli",
+    "mundus-animarum-mcp",
+]
