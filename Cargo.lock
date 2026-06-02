@@ -7,9 +7,9 @@ name = "mundus-animarum-cli"
 version = "0.1.0"
 
 [[package]]
-name = "mundus-animarum-mcp"
+name = "mundus-animarum-db"
 version = "0.1.0"
 
 [[package]]
-name = "mundus-animarum-sdk"
+name = "mundus-animarum-mcp"
 version = "0.1.0"

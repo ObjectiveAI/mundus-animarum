@@ -1,15 +1,15 @@
 [package]
-name = "mundus-animarum-sdk"
+name = "mundus-animarum-db"
 version = "0.1.0"
 edition = "2024"
 authors = ["ObjectiveAI <admin@objectiveai.dev>"]
-description = "Types and client for mundus-animarum — the world of ObjectiveAI agent souls."
+description = "Database layer for mundus-animarum — storage for ObjectiveAI agent souls."
 license = "MIT"
 repository = "https://github.com/ObjectiveAI/mundus-animarum"
 homepage = "https://objectiveai.dev"
-documentation = "https://docs.rs/mundus-animarum-sdk"
+documentation = "https://docs.rs/mundus-animarum-db"
 readme = "README.md"
-keywords = ["llm", "ai", "agent", "soul", "objectiveai"]
+keywords = ["llm", "ai", "agent", "soul", "database"]
 publish = true
 
 [dependencies]
