@@ -1,9 +1,8 @@
 //! SQLite-backed [`Database`] implementation, via `sqlx`.
 
-use crate::{Database, Remark};
+use crate::Database;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// SQLite-backed [`Database`].
 ///
@@ -40,7 +39,7 @@ impl Sqlite {
         Ok(db)
     }
 
-    /// Create the tables and indexes if they don't already exist.
+    /// Create the `souls` table if it doesn't already exist.
     async fn migrate(&self) -> Result<(), sqlx::Error> {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS souls (\
@@ -52,39 +51,8 @@ impl Sqlite {
         .execute(&self.pool)
         .await?;
 
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS remarks (\
-                id      INTEGER PRIMARY KEY AUTOINCREMENT, \
-                target  TEXT NOT NULL, \
-                key     TEXT NOT NULL, \
-                author  TEXT NOT NULL, \
-                body    TEXT NOT NULL, \
-                created INTEGER NOT NULL, \
-                read    INTEGER NOT NULL DEFAULT 0)",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS remarks_target_key ON remarks (target, key, id)",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query("CREATE INDEX IF NOT EXISTS remarks_unread ON remarks (target, read)")
-            .execute(&self.pool)
-            .await?;
-
         Ok(())
     }
-}
-
-/// Current Unix time in whole seconds (saturating to 0 before the epoch).
-fn now_secs() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 impl Database for Sqlite {
@@ -129,93 +97,5 @@ impl Database for Sqlite {
             .execute(&self.pool)
             .await?;
         Ok(res.rows_affected() > 0)
-    }
-
-    async fn add_remark(
-        &self,
-        author: &str,
-        target: &str,
-        key: &str,
-        body: &str,
-    ) -> Result<(), Self::Error> {
-        sqlx::query(
-            "INSERT INTO remarks (target, key, author, body, created, read) \
-             VALUES (?, ?, ?, ?, ?, 0)",
-        )
-        .bind(target)
-        .bind(key)
-        .bind(author)
-        .bind(body)
-        .bind(now_secs())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn list_remarks(
-        &self,
-        target: &str,
-        key: &str,
-        offset: u64,
-        count: u32,
-        unread_only: bool,
-    ) -> Result<Vec<Remark>, Self::Error> {
-        let sql = if unread_only {
-            "SELECT id, author, body, created, read FROM remarks \
-             WHERE target = ? AND key = ? AND read = 0 ORDER BY id ASC LIMIT ? OFFSET ?"
-        } else {
-            "SELECT id, author, body, created, read FROM remarks \
-             WHERE target = ? AND key = ? ORDER BY id ASC LIMIT ? OFFSET ?"
-        };
-
-        let mut tx = self.pool.begin().await?;
-
-        // `read` here is the state *before* this fetch marks the rows read,
-        // which is exactly what `Remark::read` documents. `u64` can't be bound
-        // in sqlx-sqlite, so cast `offset`/`count` to `i64`.
-        let rows: Vec<(i64, String, String, i64, bool)> = sqlx::query_as(sql)
-            .bind(target)
-            .bind(key)
-            .bind(count as i64)
-            .bind(offset as i64)
-            .fetch_all(&mut *tx)
-            .await?;
-
-        if !rows.is_empty() {
-            // Mark exactly the rows we're returning as read. `QueryBuilder`
-            // builds the `IN (?, ?, ...)` placeholder list and binds each id,
-            // satisfying sqlx 0.9's static-SQL injection guard.
-            let mut qb = sqlx::QueryBuilder::new("UPDATE remarks SET read = 1 WHERE id IN (");
-            {
-                let mut sep = qb.separated(", ");
-                for (id, ..) in &rows {
-                    sep.push_bind(*id);
-                }
-                sep.push_unseparated(")");
-            }
-            qb.build().execute(&mut *tx).await?;
-        }
-
-        tx.commit().await?;
-
-        Ok(rows
-            .into_iter()
-            .map(|(_, author, body, created, read)| Remark {
-                author,
-                body,
-                created: created as u64,
-                read,
-            })
-            .collect())
-    }
-
-    async fn unread_remarks(&self, target: &str) -> Result<Vec<(String, u64)>, Self::Error> {
-        let rows: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT key, COUNT(*) FROM remarks WHERE target = ? AND read = 0 GROUP BY key",
-        )
-        .bind(target)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows.into_iter().map(|(k, c)| (k, c as u64)).collect())
     }
 }

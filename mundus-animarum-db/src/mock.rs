@@ -1,4 +1,4 @@
-use crate::{Database, Remark};
+use crate::Database;
 use std::convert::Infallible;
 use std::future::Future;
 
@@ -42,33 +42,5 @@ impl Database for Mock {
     ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
         // Nothing existed to delete.
         async { Ok(false) }
-    }
-
-    fn add_remark(
-        &self,
-        _author: &str,
-        _target: &str,
-        _key: &str,
-        _body: &str,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
-        async { Ok(()) }
-    }
-
-    fn list_remarks(
-        &self,
-        _target: &str,
-        _key: &str,
-        _offset: u64,
-        _count: u32,
-        _unread_only: bool,
-    ) -> impl Future<Output = Result<Vec<Remark>, Self::Error>> + Send {
-        async { Ok(Vec::new()) }
-    }
-
-    fn unread_remarks(
-        &self,
-        _target: &str,
-    ) -> impl Future<Output = Result<Vec<(String, u64)>, Self::Error>> + Send {
-        async { Ok(Vec::new()) }
     }
 }
