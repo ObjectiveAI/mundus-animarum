@@ -13,3 +13,4 @@ keywords = ["llm", "ai", "agent", "soul", "database"]
 publish = true
 
 [dependencies]
+sqlx = { version = "0.9.0", features = ["sqlite", "runtime-tokio"] }

@@ -6,3 +6,4 @@ mod sqlite;
 
 pub use database::*;
 pub use mock::*;
+pub use sqlite::*;
