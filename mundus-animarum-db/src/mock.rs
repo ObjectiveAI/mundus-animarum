@@ -1,4 +1,4 @@
-use crate::Database;
+use crate::{Database, Notification};
 use std::convert::Infallible;
 use std::future::Future;
 
@@ -13,14 +13,16 @@ impl Database for Mock {
 
     fn list_keys(
         &self,
-        _agent: &str,
+        _reader: &str,
+        _target: &str,
     ) -> impl Future<Output = Result<Vec<String>, Self::Error>> + Send {
         async { Ok(Vec::new()) }
     }
 
     fn get_key(
         &self,
-        _agent: &str,
+        _reader: &str,
+        _target: &str,
         _key: &str,
     ) -> impl Future<Output = Result<Option<String>, Self::Error>> + Send {
         async { Ok(None) }
@@ -28,7 +30,7 @@ impl Database for Mock {
 
     fn set_key(
         &self,
-        _agent: &str,
+        _owner: &str,
         _key: &str,
         _value: &str,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
@@ -37,10 +39,51 @@ impl Database for Mock {
 
     fn delete_key(
         &self,
-        _agent: &str,
+        _owner: &str,
         _key: &str,
     ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
         // Nothing existed to delete.
         async { Ok(false) }
+    }
+
+    fn subscribe_key(
+        &self,
+        _subscriber: &str,
+        _target: &str,
+        _key: &str,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        async { Ok(()) }
+    }
+
+    fn subscribe_soul(
+        &self,
+        _subscriber: &str,
+        _target: &str,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        async { Ok(()) }
+    }
+
+    fn unsubscribe_key(
+        &self,
+        _subscriber: &str,
+        _target: &str,
+        _key: &str,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        async { Ok(()) }
+    }
+
+    fn unsubscribe_soul(
+        &self,
+        _subscriber: &str,
+        _target: &str,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        async { Ok(()) }
+    }
+
+    fn notifications(
+        &self,
+        _subscriber: &str,
+    ) -> impl Future<Output = Result<Vec<Notification>, Self::Error>> + Send {
+        async { Ok(Vec::new()) }
     }
 }
