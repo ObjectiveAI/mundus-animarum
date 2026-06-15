@@ -1,6 +1,6 @@
 [package]
 name = "mundus-animarum-db"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 authors = ["ObjectiveAI <admin@objectiveai.dev>"]
 description = "Database layer for mundus-animarum — storage for ObjectiveAI agent souls."
