@@ -21,6 +21,10 @@ use crate::db::Scope;
 pub struct GetRequest {
     #[schemars(description = "The soul key to read.")]
     pub key: String,
+    #[schemars(
+        description = "Full id of the agent whose soul to read. Defaults to your own soul when omitted."
+    )]
+    pub agent_full_id: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -74,8 +78,12 @@ impl MundusAnimarumMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.resolve_session(&ctx.extensions).await?;
-        let agent = require_agent_full_id(&state)?;
-        let value = self.db.get_key(agent, agent, &req.key).await.map_err(db_err)?;
+        // Reader is always you (clears your subscription on the key you read);
+        // target is the soul you're reading — yours by default, or another
+        // agent's when `agent_full_id` is given.
+        let me = require_agent_full_id(&state)?;
+        let target = req.agent_full_id.as_deref().unwrap_or(me);
+        let value = self.db.get_key(me, target, &req.key).await.map_err(db_err)?;
         let body = serde_json::to_string(&value.map_or(Value::Null, Value::String))
             .map_err(json_err)?;
         Ok(CallToolResult::success(vec![Content::text(body)]))
