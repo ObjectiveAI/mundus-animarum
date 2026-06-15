@@ -63,3 +63,22 @@ pub async fn run(address: &str, port: u16, db: Db) -> std::io::Result<()> {
     );
     serve(listener, app).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The announcement must serialize to exactly the objectiveai plugin
+    /// MCP-URL shape the host parses: `{"type":"mcp","url":...}`.
+    #[test]
+    fn announcement_is_objectiveai_mcp_shape() {
+        let announcement = Output::Mcp(Mcp {
+            r#type: McpType::Mcp,
+            url: "http://127.0.0.1:54321".to_string(),
+        });
+        assert_eq!(
+            serde_json::to_string(&announcement).unwrap(),
+            r#"{"type":"mcp","url":"http://127.0.0.1:54321"}"#,
+        );
+    }
+}
