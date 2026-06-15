@@ -2,7 +2,6 @@
 
 use clap::Args as ClapArgs;
 
-use crate::command::agent_ref::AgentRef;
 use crate::context::Context;
 use crate::error::Error;
 
@@ -14,13 +13,15 @@ pub struct Args {
     /// The value to store.
     #[arg(long)]
     pub value: String,
-    #[command(flatten)]
-    pub agent: AgentRef,
+    /// Full id of the agent whose soul to write. Defaults to the configured
+    /// `OBJECTIVEAI_AGENT_FULL_ID` (the caller's own) when omitted.
+    #[arg(long)]
+    pub agent_full_id: Option<String>,
 }
 
 impl Args {
     pub async fn run(self, ctx: &Context) -> Result<serde_json::Value, Error> {
-        let agent = self.agent.resolve(&ctx.config)?;
+        let agent = ctx.agent_full_id(self.agent_full_id)?;
         let db = ctx.db().await?;
         db.set_key(&agent, &self.key, &self.value).await?;
         // Echo the stored value back, mirroring `get`.

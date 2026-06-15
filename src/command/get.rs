@@ -10,17 +10,17 @@ pub struct Args {
     /// The soul key to read.
     #[arg(long)]
     pub key: String,
-    /// Full id of the agent whose soul to read.
+    /// Full id of the agent whose soul to read. Defaults to the configured
+    /// `OBJECTIVEAI_AGENT_FULL_ID` (the caller's own) when omitted.
     #[arg(long)]
-    pub agent_full_id: String,
+    pub agent_full_id: Option<String>,
 }
 
 impl Args {
     pub async fn run(self, ctx: &Context) -> Result<serde_json::Value, Error> {
+        let agent = ctx.agent_full_id(self.agent_full_id)?;
         let db = ctx.db().await?;
-        let value = db
-            .get_key(&self.agent_full_id, &self.agent_full_id, &self.key)
-            .await?;
+        let value = db.get_key(&agent, &agent, &self.key).await?;
         Ok(value.map_or(serde_json::Value::Null, serde_json::Value::String))
     }
 }

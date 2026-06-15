@@ -53,6 +53,15 @@ impl Context {
     pub fn caller(&self) -> &str {
         &self.config.objectiveai_agent_instance_hierarchy
     }
+
+    /// Resolve a target agent full id for the soul commands: the explicit
+    /// `--agent-full-id` if given, otherwise the configured
+    /// `OBJECTIVEAI_AGENT_FULL_ID` (the caller's own soul). Errors when
+    /// neither is available.
+    pub fn agent_full_id(&self, arg: Option<String>) -> Result<String, Error> {
+        arg.or_else(|| self.config.objectiveai_agent_full_id.clone())
+            .ok_or(Error::AgentFullIdRequired)
+    }
 }
 
 impl Default for Context {
