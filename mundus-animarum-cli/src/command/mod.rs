@@ -11,7 +11,10 @@ use serde_json::Value;
 use crate::context::Context;
 use crate::error::Error;
 
+pub(crate) mod agent_ref;
 pub mod get;
+pub mod list;
+pub mod set;
 
 #[derive(Parser)]
 #[command(name = "mundus-animarum")]
@@ -25,12 +28,18 @@ pub(crate) struct Cli {
 pub(crate) enum Commands {
     /// Read the value of a key in an agent's soul.
     Get(get::Args),
+    /// Create or overwrite a key in an agent's soul.
+    Set(set::Args),
+    /// List every key in an agent's soul.
+    List(list::Args),
 }
 
 impl Commands {
     pub(crate) async fn handle(self, ctx: &Context) -> Result<Value, Error> {
         match self {
             Commands::Get(args) => args.run(ctx).await,
+            Commands::Set(args) => args.run(ctx).await,
+            Commands::List(args) => args.run(ctx).await,
         }
     }
 }
