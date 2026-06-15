@@ -1,6 +1,13 @@
+use std::ffi::OsString;
 use std::path::PathBuf;
 
+use clap::Parser;
 use envconfig::Envconfig;
+use serde_json::Value;
+
+use crate::commands::Cli;
+use crate::context::Context;
+use crate::error::Error;
 
 // ---------------------------------------------------------------------------
 // Env-driven runtime config (3-struct pattern; mirrors objectiveai-cli)
@@ -129,4 +136,38 @@ impl Config {
 /// Build the runtime config from the process environment.
 pub fn load_config() -> Config {
     ConfigBuilder::init_from_env().unwrap_or_default().build()
+}
+
+// ---------------------------------------------------------------------------
+// Command entry point
+// ---------------------------------------------------------------------------
+
+/// Help and version are informational clap "errors" — they carry the text
+/// the user asked for and should be printed and exit 0, not treated as
+/// parse failures. `main` uses this to special-case [`Error::Clap`].
+pub fn is_informational(e: &clap::Error) -> bool {
+    use clap::error::ErrorKind;
+    matches!(
+        e.kind(),
+        ErrorKind::DisplayHelp
+            | ErrorKind::DisplayVersion
+            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    )
+}
+
+/// Parse `args` and dispatch to the matching command handler, returning the
+/// command's JSON result.
+///
+/// Arguments are parsed **before** the context is built, so `--help` /
+/// `--version` (and parse errors) don't require the environment to be
+/// configured. The context — and thus config loading — is constructed only
+/// once a real command is about to run.
+pub async fn run<I, T>(args: I) -> Result<Value, Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    let cli = Cli::try_parse_from(args)?;
+    let ctx = Context::new();
+    cli.command.handle(&ctx).await
 }
