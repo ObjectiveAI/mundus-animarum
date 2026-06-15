@@ -5,6 +5,7 @@ mod command;
 mod context;
 mod db;
 pub mod error;
+pub mod mcp;
 
 mod run;
 
