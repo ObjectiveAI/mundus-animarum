@@ -1,7 +1,8 @@
 //! mundus-animarum database layer — Postgres-backed storage for ObjectiveAI
 //! agent souls, via `sqlx`.
 
-use sqlx::PgPool;
+pub use sqlx::PgPool;
+pub use sqlx::postgres::PgPoolOptions;
 
 /// What a subscription / notification is scoped to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,10 +49,22 @@ pub struct Db {
 }
 
 impl Db {
-    /// Connect to the Postgres database at `url` and ensure the schema exists.
+    /// Connect to the Postgres database at `url` (with sqlx's default pool) and
+    /// ensure the schema exists. For high concurrency, size the pool yourself
+    /// with [`connect_with`](Self::connect_with) or [`from_pool`](Self::from_pool).
     pub async fn connect(url: &str) -> Result<Self, sqlx::Error> {
         let db = Self {
             pool: PgPool::connect(url).await?,
+        };
+        db.migrate().await?;
+        Ok(db)
+    }
+
+    /// Connect to the Postgres database at `url` with a caller-tuned pool
+    /// (e.g. [`PgPoolOptions::max_connections`]) and ensure the schema exists.
+    pub async fn connect_with(options: PgPoolOptions, url: &str) -> Result<Self, sqlx::Error> {
+        let db = Self {
+            pool: options.connect(url).await?,
         };
         db.migrate().await?;
         Ok(db)
@@ -180,22 +193,20 @@ impl Db {
     pub async fn set_key(&self, owner: &str, key: &str, value: &str) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
-        // Detect whether this is a new key (an addition to the key set).
-        let existed: Option<(i32,)> =
-            sqlx::query_as("SELECT 1 FROM souls WHERE agent = $1 AND key = $2")
-                .bind(owner)
-                .bind(key)
-                .fetch_optional(&mut *tx)
-                .await?;
-
-        sqlx::query(
+        // Upsert and learn, in one statement, whether a new key was created: a
+        // freshly inserted row has `xmax = 0`, while an overwritten one carries
+        // this transaction's id. Detecting it atomically (rather than a separate
+        // SELECT-then-INSERT) avoids a check-then-write race that could drop a
+        // soul-subscription notification.
+        let (inserted,): (bool,) = sqlx::query_as(
             "INSERT INTO souls (agent, key, value) VALUES ($1, $2, $3) \
-             ON CONFLICT (agent, key) DO UPDATE SET value = EXCLUDED.value",
+             ON CONFLICT (agent, key) DO UPDATE SET value = EXCLUDED.value \
+             RETURNING (xmax = '0'::xid)",
         )
         .bind(owner)
         .bind(key)
         .bind(value)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await?;
 
         // Value changed (or key created): fire key subscriptions on this key.
@@ -206,7 +217,7 @@ impl Db {
             .await?;
 
         // New key: the key set grew, so fire soul subscriptions too.
-        if existed.is_none() {
+        if inserted {
             sqlx::query("UPDATE soul_subscriptions SET unread = TRUE WHERE target = $1")
                 .bind(owner)
                 .execute(&mut *tx)
