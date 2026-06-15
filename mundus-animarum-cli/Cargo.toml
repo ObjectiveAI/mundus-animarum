@@ -17,3 +17,4 @@ name = "mundus-animarum"
 path = "src/main.rs"
 
 [dependencies]
+envconfig = "0.11.1"
