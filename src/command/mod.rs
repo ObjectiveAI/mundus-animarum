@@ -1,15 +1,25 @@
 //! CLI command surface.
 //!
-//! Each subcommand is its own crate-level module; [`Cli`] is the clap root.
-//! The top-level [`run`](crate::run) entry point (in `run.rs`) parses argv
-//! into it and dispatches through [`Commands::handle`].
+//! Each subcommand lives in its own module under `command`; [`Cli`] is the
+//! clap root. The top-level [`run`](crate::run) entry point (in `run.rs`)
+//! parses argv into it and dispatches through [`Commands::handle`].
 
 use clap::{Parser, Subcommand};
 use serde_json::Value;
 
 use crate::context::Context;
 use crate::error::Error;
-use crate::{delete, get, list, notifications, set, subscribe, unsubscribe};
+
+pub(crate) mod agent_ref;
+pub(crate) mod subscription;
+
+pub mod delete;
+pub mod get;
+pub mod list;
+pub mod notifications;
+pub mod set;
+pub mod subscribe;
+pub mod unsubscribe;
 
 #[derive(Parser)]
 #[command(name = "mundus-animarum")]
