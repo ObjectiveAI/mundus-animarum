@@ -11,7 +11,7 @@ pub enum Error {
     Clap(#[from] clap::Error),
     /// A soul-store (postgres) operation failed.
     #[error("database error: {0}")]
-    Db(#[from] mundus_animarum_db::Error),
+    Db(#[from] crate::db::Error),
     /// No agent full id was given and none is configured. Agents running
     /// inside objectiveai get `OBJECTIVEAI_AGENT_FULL_ID` from the
     /// environment; anything outside must pass `--agent-full-id`.

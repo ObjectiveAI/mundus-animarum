@@ -1558,29 +1558,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "mundus-animarum-cli"
+name = "mundus-animarum"
 version = "1.0.0"
 dependencies = [
  "clap",
  "dotenv",
  "envconfig",
- "mundus-animarum-db",
  "objectiveai-sdk",
  "serde_json",
+ "sqlx",
  "thiserror 2.0.18",
  "tokio",
 ]
-
-[[package]]
-name = "mundus-animarum-db"
-version = "1.0.0"
-dependencies = [
- "sqlx",
-]
-
-[[package]]
-name = "mundus-animarum-mcp"
-version = "1.0.0"
 
 [[package]]
 name = "new_debug_unreachable"

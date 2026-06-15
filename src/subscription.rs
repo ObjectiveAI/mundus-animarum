@@ -1,9 +1,9 @@
 //! Shared args + resolution for `subscribe` / `unsubscribe`.
 
 use clap::{ArgGroup, Args};
-use mundus_animarum_db::Scope;
 
 use crate::context::Context;
+use crate::db::Scope;
 
 /// Exactly one of `--key` (a single key) or `--keys` (the whole key set),
 /// plus the required `--agent-full-id` of the target agent to watch.

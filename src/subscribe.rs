@@ -1,12 +1,12 @@
-//! `unsubscribe` — stop watching another agent's soul: a single `--key` or
-//! the whole key set (`--keys`).
+//! `subscribe` — watch another agent's soul: a single `--key` or the whole
+//! key set (`--keys`).
 
 use clap::Args as ClapArgs;
-use mundus_animarum_db::Scope;
 
-use crate::command::subscription::SubscriptionArgs;
 use crate::context::Context;
+use crate::db::Scope;
 use crate::error::Error;
+use crate::subscription::SubscriptionArgs;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -19,8 +19,8 @@ impl Args {
         let r = self.subscription.resolve(ctx);
         let db = ctx.db().await?;
         match r.scope {
-            Scope::Key(key) => db.unsubscribe_key(&r.caller, &r.target, &key).await?,
-            Scope::Soul => db.unsubscribe_soul(&r.caller, &r.target).await?,
+            Scope::Key(key) => db.subscribe_key(&r.caller, &r.target, &key).await?,
+            Scope::Soul => db.subscribe_soul(&r.caller, &r.target).await?,
         }
         Ok(serde_json::Value::Null)
     }

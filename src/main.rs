@@ -1,9 +1,9 @@
-use mundus_animarum_cli::error::Error;
+use mundus_animarum::error::Error;
 
 #[tokio::main]
 async fn main() {
     let _ = dotenv::dotenv();
-    let code = match mundus_animarum_cli::run(std::env::args_os()).await {
+    let code = match mundus_animarum::run(std::env::args_os()).await {
         // Terminal success: emit the command's JSON result as one JSONL line.
         Ok(value) => {
             print_json(serde_json::to_string(&value));
@@ -11,7 +11,7 @@ async fn main() {
         }
         // `--help` / `--version` / missing subcommand: informational, not a
         // failure. Emit clap's text as a help line and exit 0.
-        Err(Error::Clap(e)) if mundus_animarum_cli::is_informational(&e) => {
+        Err(Error::Clap(e)) if mundus_animarum::is_informational(&e) => {
             print_json(serde_json::to_string(
                 &serde_json::json!({ "type": "help", "help": e.to_string() }),
             ));

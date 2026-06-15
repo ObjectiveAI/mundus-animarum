@@ -4,9 +4,9 @@
 //! hierarchy. Read-only — it does not clear anything.
 
 use clap::Args as ClapArgs;
-use mundus_animarum_db::Scope;
 
 use crate::context::Context;
+use crate::db::Scope;
 use crate::error::Error;
 
 #[derive(Debug, ClapArgs)]

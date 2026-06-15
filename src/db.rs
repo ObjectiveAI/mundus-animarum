@@ -1,8 +1,7 @@
 //! mundus-animarum database layer — Postgres-backed storage for ObjectiveAI
 //! agent souls, via `sqlx`.
 
-pub use sqlx::PgPool;
-pub use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
 
 /// The error type returned by every [`Db`] operation — re-exported from
 /// `sqlx` so callers don't need a direct `sqlx` dependency.
@@ -43,7 +42,7 @@ pub struct Notification {
 /// "self" agent. Every operation names the agent(s) it acts on by explicit ID.
 /// Deciding whether a call targets the caller's own soul or another agent's —
 /// and supplying the caller's ID — is the responsibility of the layer above
-/// (the MCP server), not this type.
+/// (the CLI), not this type.
 ///
 /// Cheap to clone — the inner [`PgPool`] is an `Arc`-backed handle, so clones
 /// share the same connection pool.
@@ -53,31 +52,11 @@ pub struct Db {
 }
 
 impl Db {
-    /// Connect to the Postgres database at `url` (with sqlx's default pool) and
-    /// ensure the schema exists. For high concurrency, size the pool yourself
-    /// with [`connect_with`](Self::connect_with) or [`from_pool`](Self::from_pool).
+    /// Connect to the Postgres database at `url` and ensure the schema exists.
     pub async fn connect(url: &str) -> Result<Self, sqlx::Error> {
         let db = Self {
             pool: PgPool::connect(url).await?,
         };
-        db.migrate().await?;
-        Ok(db)
-    }
-
-    /// Connect to the Postgres database at `url` with a caller-tuned pool
-    /// (e.g. [`PgPoolOptions::max_connections`]) and ensure the schema exists.
-    pub async fn connect_with(options: PgPoolOptions, url: &str) -> Result<Self, sqlx::Error> {
-        let db = Self {
-            pool: options.connect(url).await?,
-        };
-        db.migrate().await?;
-        Ok(db)
-    }
-
-    /// Adopt an existing pool (caller controls the connection options) and
-    /// ensure the schema exists.
-    pub async fn from_pool(pool: PgPool) -> Result<Self, sqlx::Error> {
-        let db = Self { pool };
         db.migrate().await?;
         Ok(db)
     }

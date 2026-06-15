@@ -6,9 +6,9 @@
 //! never touch postgres (e.g. `--help`) don't pay the connection cost and
 //! don't fail when the database is unreachable.
 
-use mundus_animarum_db::Db;
 use tokio::sync::OnceCell;
 
+use crate::db::Db;
 use crate::error::Error;
 
 pub struct Context {

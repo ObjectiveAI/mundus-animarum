@@ -2,7 +2,7 @@
 
 use clap::Args as ClapArgs;
 
-use crate::command::agent_ref::AgentRef;
+use crate::agent_ref::AgentRef;
 use crate::context::Context;
 use crate::error::Error;
 
