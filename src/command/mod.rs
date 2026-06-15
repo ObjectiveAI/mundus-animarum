@@ -16,6 +16,7 @@ pub(crate) mod subscription;
 pub mod delete;
 pub mod get;
 pub mod list;
+pub mod mcp;
 pub mod notifications;
 pub mod set;
 pub mod subscribe;
@@ -45,6 +46,11 @@ pub(crate) enum Commands {
     Unsubscribe(unsubscribe::Args),
     /// List the caller's pending soul-change notifications.
     Notifications(notifications::Args),
+    /// MCP server management (`mcp mundus-animarum begin`).
+    Mcp {
+        #[command(subcommand)]
+        command: mcp::Commands,
+    },
 }
 
 impl Commands {
@@ -57,6 +63,7 @@ impl Commands {
             Commands::Subscribe(args) => args.run(ctx).await,
             Commands::Unsubscribe(args) => args.run(ctx).await,
             Commands::Notifications(args) => args.run(ctx).await,
+            Commands::Mcp { command } => command.run(ctx).await,
         }
     }
 }
