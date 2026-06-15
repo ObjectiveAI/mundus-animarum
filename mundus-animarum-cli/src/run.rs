@@ -25,10 +25,6 @@ struct EnvConfigBuilder {
     objectiveai_agent_remote: Option<String>,
     #[envconfig(from = "OBJECTIVEAI_AGENT_INSTANCE_HIERARCHY")]
     objectiveai_agent_instance_hierarchy: Option<String>,
-    /// Process-wide mock switch (env `MUNDUS_ANIMARUM_MOCK`).
-    /// Parsed leniently (see [`parse_bool`]); defaults to `false`.
-    #[envconfig(from = "MUNDUS_ANIMARUM_MOCK")]
-    mock: Option<String>,
 }
 
 impl EnvConfigBuilder {
@@ -40,17 +36,8 @@ impl EnvConfigBuilder {
             objectiveai_agent_full_id: self.objectiveai_agent_full_id,
             objectiveai_agent_remote: self.objectiveai_agent_remote,
             objectiveai_agent_instance_hierarchy: self.objectiveai_agent_instance_hierarchy,
-            mock: self.mock,
         }
     }
-}
-
-/// Lenient boolean env parse, mirroring objectiveai's convention:
-/// anything non-empty that isn't `"0"` or `"false"` (case-insensitive)
-/// is `true`.
-fn parse_bool(s: &str) -> bool {
-    let v = s.trim();
-    !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false")
 }
 
 #[derive(Default)]
@@ -61,7 +48,6 @@ pub struct ConfigBuilder {
     pub objectiveai_agent_full_id: Option<String>,
     pub objectiveai_agent_remote: Option<String>,
     pub objectiveai_agent_instance_hierarchy: Option<String>,
-    pub mock: Option<String>,
 }
 
 impl Envconfig for ConfigBuilder {
@@ -99,7 +85,6 @@ impl ConfigBuilder {
             objectiveai_agent_instance_hierarchy: self
                 .objectiveai_agent_instance_hierarchy
                 .unwrap_or_else(|| "mundus-animarum".to_string()),
-            mock: self.mock.as_deref().map(parse_bool).unwrap_or(false),
         }
     }
 }
@@ -131,9 +116,6 @@ pub struct Config {
     /// this agent instance; captured for parity with the objectiveai
     /// agent-environment contract.
     pub objectiveai_agent_instance_hierarchy: String,
-    /// Process-wide mock switch (env `MUNDUS_ANIMARUM_MOCK`, default
-    /// `false`). Reserved for future mock-mode flows.
-    pub mock: bool,
 }
 
 impl Config {
