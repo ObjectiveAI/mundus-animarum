@@ -4,6 +4,10 @@
 pub use sqlx::PgPool;
 pub use sqlx::postgres::PgPoolOptions;
 
+/// The error type returned by every [`Db`] operation — re-exported from
+/// `sqlx` so callers don't need a direct `sqlx` dependency.
+pub use sqlx::Error;
+
 /// What a subscription / notification is scoped to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
