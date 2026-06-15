@@ -45,14 +45,13 @@ impl Context {
             .await
     }
 
-    /// The calling agent's full id, from `OBJECTIVEAI_AGENT_FULL_ID` — i.e.
-    /// "self", the agent the CLI runs as. Required by the subscription and
-    /// notification commands; errors when unset.
-    pub fn caller(&self) -> Result<&str, Error> {
-        self.config
-            .objectiveai_agent_full_id
-            .as_deref()
-            .ok_or(Error::AgentFullIdRequired)
+    /// The subscription owner: this agent's instance hierarchy
+    /// (`OBJECTIVEAI_AGENT_INSTANCE_HIERARCHY`, defaulting to
+    /// "mundus-animarum"). Subscriptions and notifications are owned by the
+    /// instance hierarchy rather than the agent full id — multiple agents can
+    /// share a full id, so each instance hierarchy tracks its own.
+    pub fn caller(&self) -> &str {
+        &self.config.objectiveai_agent_instance_hierarchy
     }
 }
 

@@ -1,7 +1,7 @@
 //! `notifications` — list the caller's pending soul-change notifications.
 //!
-//! Takes no arguments: the subscriber is always the caller (the agent the
-//! CLI runs as). Read-only — it does not clear anything.
+//! Takes no arguments: the subscriber is always the caller's instance
+//! hierarchy. Read-only — it does not clear anything.
 
 use clap::Args as ClapArgs;
 use mundus_animarum_db::Scope;
@@ -14,7 +14,7 @@ pub struct Args {}
 
 impl Args {
     pub async fn run(self, ctx: &Context) -> Result<serde_json::Value, Error> {
-        let caller = ctx.caller()?;
+        let caller = ctx.caller();
         let db = ctx.db().await?;
         let notifications = db.notifications(caller).await?;
         // One JSON object per pending notification: a single-key change

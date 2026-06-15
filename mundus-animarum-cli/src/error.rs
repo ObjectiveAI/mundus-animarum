@@ -17,9 +17,6 @@ pub enum Error {
     /// environment; anything outside must pass `--agent-full-id`.
     #[error("agent full ID is required for agents operating outside of objectiveai")]
     AgentFullIdRequired,
-    /// An agent tried to subscribe to (or unsubscribe from) its own soul.
-    #[error("an agent cannot subscribe to its own soul")]
-    SelfSubscription,
     /// Catch-all for everything without a more specific variant.
     #[error("{0}")]
     Other(String),

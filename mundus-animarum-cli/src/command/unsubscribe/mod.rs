@@ -16,7 +16,7 @@ pub struct Args {
 
 impl Args {
     pub async fn run(self, ctx: &Context) -> Result<serde_json::Value, Error> {
-        let r = self.subscription.resolve(ctx)?;
+        let r = self.subscription.resolve(ctx);
         let db = ctx.db().await?;
         match r.scope {
             Scope::Key(key) => db.unsubscribe_key(&r.caller, &r.target, &key).await?,
