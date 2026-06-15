@@ -10,7 +10,6 @@ use serde_json::Value;
 use crate::context::Context;
 use crate::error::Error;
 
-pub(crate) mod agent_ref;
 pub(crate) mod subscription;
 
 pub mod delete;

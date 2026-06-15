@@ -2,7 +2,6 @@
 
 use clap::Args as ClapArgs;
 
-use crate::command::agent_ref::AgentRef;
 use crate::context::Context;
 use crate::error::Error;
 
@@ -11,17 +10,17 @@ pub struct Args {
     /// The soul key to read.
     #[arg(long)]
     pub key: String,
-    #[command(flatten)]
-    pub agent: AgentRef,
+    /// Full id of the agent whose soul to read.
+    #[arg(long)]
+    pub agent_full_id: String,
 }
 
 impl Args {
     pub async fn run(self, ctx: &Context) -> Result<serde_json::Value, Error> {
-        let agent = self.agent.resolve(&ctx.config)?;
         let db = ctx.db().await?;
-        // Reading your own soul: reader and target are the same agent.
-        // The value is returned as a JSON string; an unset key is null.
-        let value = db.get_key(&agent, &agent, &self.key).await?;
+        let value = db
+            .get_key(&self.agent_full_id, &self.agent_full_id, &self.key)
+            .await?;
         Ok(value.map_or(serde_json::Value::Null, serde_json::Value::String))
     }
 }

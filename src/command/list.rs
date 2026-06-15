@@ -2,22 +2,22 @@
 
 use clap::Args as ClapArgs;
 
-use crate::command::agent_ref::AgentRef;
 use crate::context::Context;
 use crate::error::Error;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
-    #[command(flatten)]
-    pub agent: AgentRef,
+    /// Full id of the agent whose soul to list.
+    #[arg(long)]
+    pub agent_full_id: String,
 }
 
 impl Args {
     pub async fn run(self, ctx: &Context) -> Result<serde_json::Value, Error> {
-        let agent = self.agent.resolve(&ctx.config)?;
         let db = ctx.db().await?;
-        // Listing your own soul: reader and target are the same agent.
-        let keys = db.list_keys(&agent, &agent).await?;
+        let keys = db
+            .list_keys(&self.agent_full_id, &self.agent_full_id)
+            .await?;
         Ok(serde_json::Value::Array(
             keys.into_iter().map(serde_json::Value::String).collect(),
         ))
