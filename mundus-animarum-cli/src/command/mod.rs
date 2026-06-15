@@ -1,6 +1,6 @@
 //! CLI command surface.
 //!
-//! Each subcommand lives in its own folder module (`commands::<name>`)
+//! Each subcommand lives in its own folder module (`command::<name>`)
 //! holding its clap args and handler. [`Cli`] is the clap root; the
 //! top-level [`run`](crate::run) entry point (in `run.rs`) parses argv into
 //! it and dispatches through [`Commands::handle`].

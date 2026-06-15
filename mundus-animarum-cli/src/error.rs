@@ -1,11 +1,12 @@
 //! CLI error type. Every command handler returns `Result<_, Error>`;
-//! `commands::run` stringifies a terminal `Err` to stderr and exits non-zero.
+//! `run` (in `run.rs`) returns it to `main`, which renders the terminal
+//! `Err` as an objectiveai SDK error frame.
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Argument parsing failed, or clap wants to print `--help` /
     /// `--version` (those are informational, not real failures — `main`
-    /// special-cases them via [`crate::commands::is_informational`]).
+    /// special-cases them via [`crate::run::is_informational`]).
     #[error("{0}")]
     Clap(#[from] clap::Error),
     /// A soul-store (postgres) operation failed.

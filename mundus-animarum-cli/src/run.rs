@@ -5,7 +5,7 @@ use clap::Parser;
 use envconfig::Envconfig;
 use serde_json::Value;
 
-use crate::commands::Cli;
+use crate::command::Cli;
 use crate::context::Context;
 use crate::error::Error;
 
