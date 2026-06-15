@@ -44,6 +44,16 @@ impl Context {
             })
             .await
     }
+
+    /// The calling agent's full id, from `OBJECTIVEAI_AGENT_FULL_ID` — i.e.
+    /// "self", the agent the CLI runs as. Required by the subscription and
+    /// notification commands; errors when unset.
+    pub fn caller(&self) -> Result<&str, Error> {
+        self.config
+            .objectiveai_agent_full_id
+            .as_deref()
+            .ok_or(Error::AgentFullIdRequired)
+    }
 }
 
 impl Default for Context {
