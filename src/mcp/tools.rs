@@ -14,7 +14,6 @@ use rmcp::{ErrorData, RoleServer, handler::server::wrapper::Parameters, schemars
 use serde_json::Value;
 
 use super::MundusAnimarumMcp;
-use super::session::SessionState;
 use crate::db::Scope;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -87,7 +86,7 @@ impl MundusAnimarumMcp {
         // Reader is always you (clears your subscription on the key you read);
         // target is the soul you're reading — yours by default, or another
         // agent's when `agent_full_id` is given.
-        let me = require_agent_full_id(&state)?;
+        let me = state.agent_full_id.as_str();
         let target = req.agent_full_id.as_deref().unwrap_or(me);
         let value = self.db.get_key(me, target, &req.key).await.map_err(db_err)?;
         let body = serde_json::to_string(&value.map_or(Value::Null, Value::String))
@@ -102,7 +101,7 @@ impl MundusAnimarumMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.resolve_session(&ctx.extensions).await?;
-        let agent = require_agent_full_id(&state)?;
+        let agent = state.agent_full_id.as_str();
         self.db.set_key(agent, &req.key, &req.value).await.map_err(db_err)?;
         // Echo the stored value back, mirroring the CLI's `set`.
         let body = serde_json::to_string(&Value::String(req.value)).map_err(json_err)?;
@@ -119,7 +118,7 @@ impl MundusAnimarumMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.resolve_session(&ctx.extensions).await?;
-        let agent = require_agent_full_id(&state)?;
+        let agent = state.agent_full_id.as_str();
         let existed = self.db.delete_key(agent, &req.key).await.map_err(db_err)?;
         let body = serde_json::to_string(&Value::Bool(existed)).map_err(json_err)?;
         Ok(CallToolResult::success(vec![Content::text(body)]))
@@ -135,7 +134,7 @@ impl MundusAnimarumMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.resolve_session(&ctx.extensions).await?;
-        let subscriber = require_agent_instance_hierarchy(&state)?;
+        let subscriber = state.agent_instance_hierarchy.as_str();
         self.db
             .subscribe_key(subscriber, &req.agent_full_id, &req.key)
             .await
@@ -153,7 +152,7 @@ impl MundusAnimarumMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.resolve_session(&ctx.extensions).await?;
-        let subscriber = require_agent_instance_hierarchy(&state)?;
+        let subscriber = state.agent_instance_hierarchy.as_str();
         self.db
             .subscribe_soul(subscriber, &req.agent_full_id)
             .await
@@ -171,7 +170,7 @@ impl MundusAnimarumMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.resolve_session(&ctx.extensions).await?;
-        let subscriber = require_agent_instance_hierarchy(&state)?;
+        let subscriber = state.agent_instance_hierarchy.as_str();
         self.db
             .unsubscribe_key(subscriber, &req.agent_full_id, &req.key)
             .await
@@ -189,7 +188,7 @@ impl MundusAnimarumMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.resolve_session(&ctx.extensions).await?;
-        let subscriber = require_agent_instance_hierarchy(&state)?;
+        let subscriber = state.agent_instance_hierarchy.as_str();
         self.db
             .unsubscribe_soul(subscriber, &req.agent_full_id)
             .await
@@ -209,7 +208,7 @@ impl MundusAnimarumMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.resolve_session(&ctx.extensions).await?;
-        let subscriber = require_agent_instance_hierarchy(&state)?;
+        let subscriber = state.agent_instance_hierarchy.as_str();
         let limit = req.count.unwrap_or(10).min(10);
         // Atomically claim (resolve) up to `limit` notifications and report how
         // many remain — safe under concurrent reads (see Db::take_notifications).
@@ -234,24 +233,6 @@ impl MundusAnimarumMcp {
         .map_err(json_err)?;
         Ok(CallToolResult::success(vec![Content::text(body)]))
     }
-}
-
-/// The caller's own agent full id, or an `invalid_params` error.
-fn require_agent_full_id(state: &SessionState) -> Result<&str, ErrorData> {
-    state.agent_full_id.as_deref().ok_or_else(|| {
-        ErrorData::invalid_params(
-            "agent full ID is required for agents operating outside of objectiveai".to_string(),
-            None,
-        )
-    })
-}
-
-/// The caller's agent instance hierarchy (subscription owner), or an
-/// `invalid_params` error.
-fn require_agent_instance_hierarchy(state: &SessionState) -> Result<&str, ErrorData> {
-    state.agent_instance_hierarchy.as_deref().ok_or_else(|| {
-        ErrorData::invalid_params("agent instance hierarchy is required".to_string(), None)
-    })
 }
 
 /// The JSON `null` success result shared by the (un)subscribe tools.

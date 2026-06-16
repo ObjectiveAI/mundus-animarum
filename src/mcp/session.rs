@@ -2,20 +2,19 @@
 //! [`super::header_session_manager::HeaderSessionManager`] and consumed by
 //! every tool via [`super::MundusAnimarumMcp::resolve_session`].
 //!
-//! Two identities flow in per session, sourced on every connect:
+//! Two identities flow in per session, each from its own required header
+//! (re-sent on every connect):
 //!
-//!   - [`HEADER_ARGUMENTS`] (`X-OBJECTIVEAI-ARGUMENTS`) carries a JSON object
-//!     of agent arguments. We read `agent_full_id` (and, as a fallback,
-//!     `agent_instance_hierarchy`) case-insensitively.
+//!   - [`HEADER_AGENT_FULL_ID`] (`X-OBJECTIVEAI-AGENT-FULL-ID`) — the caller's
+//!     own agent full id (the soul owner/reader for `get`/`set`/`delete`).
 //!   - [`HEADER_AGENT_INSTANCE_HIERARCHY`]
-//!     (`X-OBJECTIVEAI-AGENT-INSTANCE-HIERARCHY`) is the session-global
-//!     instance-hierarchy chain — the preferred source for the AIH.
+//!     (`X-OBJECTIVEAI-AGENT-INSTANCE-HIERARCHY`) — the caller's instance
+//!     hierarchy (the owner of subscriptions and notifications).
 //!
-//! Both are optional here; a tool that needs one it wasn't given returns an
-//! `invalid_params` error. The registry is in-memory only: objectiveai
-//! re-sends these headers on every connect, so a process restart is
-//! invisible — the lazy header capture in the session manager rebuilds the
-//! entry from the next request.
+//! Both are required: a connection (fresh or reconnect) is rejected if either
+//! header is missing or empty (see [`super::header_session_manager`]). The
+//! registry is in-memory only — the headers, re-sent on every connect, let a
+//! process restart rebuild the entry transparently.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,24 +22,24 @@ use std::sync::Arc;
 use rmcp::transport::common::server_side_http::SessionId;
 use tokio::sync::RwLock;
 
-/// HTTP header carrying a JSON object of agent arguments. We look up
-/// `agent_full_id` / `agent_instance_hierarchy` case-insensitively.
-pub const HEADER_ARGUMENTS: &str = "X-OBJECTIVEAI-ARGUMENTS";
+/// HTTP header carrying the caller's own agent full id.
+pub const HEADER_AGENT_FULL_ID: &str = "X-OBJECTIVEAI-AGENT-FULL-ID";
 
-/// HTTP header carrying the session-global agent instance hierarchy. The
-/// preferred source for the AIH (the subscription owner).
+/// HTTP header carrying the caller's agent instance hierarchy (the
+/// subscription / notification owner).
 pub const HEADER_AGENT_INSTANCE_HIERARCHY: &str = "X-OBJECTIVEAI-AGENT-INSTANCE-HIERARCHY";
 
 /// The identities pulled from the request headers and pinned to the rmcp
-/// session in memory.
+/// session in memory. Both are always present — the session manager rejects
+/// any connection missing either header.
 #[derive(Debug, Clone)]
 pub struct SessionState {
     /// The caller's own agent full id — the soul owner/reader for the
-    /// `get` / `set` / `delete` tools. `None` if no source carried it.
-    pub agent_full_id: Option<String>,
+    /// `get` / `set` / `delete` tools.
+    pub agent_full_id: String,
     /// The caller's agent instance hierarchy — the owner of subscriptions
-    /// and notifications. `None` if no source carried it.
-    pub agent_instance_hierarchy: Option<String>,
+    /// and notifications.
+    pub agent_instance_hierarchy: String,
 }
 
 /// In-memory map of `SessionId → SessionState`. Shared between the custom

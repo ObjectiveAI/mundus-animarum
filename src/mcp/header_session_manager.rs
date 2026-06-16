@@ -4,11 +4,13 @@
 //! 1. **`has_session` always returns `Ok(true)`.** Tower never 401s; any
 //!    session id the client presents is accepted for routing.
 //! 2. **Lazy `(handle, worker)` mint on first POST.** When tower routes a
-//!    request for an id the inner `LocalSessionManager` doesn't hold, we pull
-//!    the `X-OBJECTIVEAI-*` identity headers off the current message's
-//!    injected `http::request::Parts`, record `SessionState`, spawn the
-//!    worker + service end, and drive the worker past its initial
-//!    `InitializeRequest` wait state with a synthetic stub.
+//!    request for an id the inner `LocalSessionManager` doesn't hold, we read
+//!    the required `X-OBJECTIVEAI-AGENT-FULL-ID` /
+//!    `X-OBJECTIVEAI-AGENT-INSTANCE-HIERARCHY` headers off the current
+//!    message's injected `http::request::Parts` (rejecting the connection if
+//!    either is missing), record `SessionState`, spawn the worker + service
+//!    end, and drive the worker past its initial `InitializeRequest` wait
+//!    state with a synthetic stub.
 //!
 //! Net effect: objectiveai re-sends the headers on every connect; state is
 //! in-memory only; a process restart silently rebuilds the per-session entry
@@ -34,7 +36,7 @@ use rmcp::transport::streamable_http_server::session::{ServerSseMessage, Session
 
 use super::MundusAnimarumMcp;
 use super::session::{
-    HEADER_AGENT_INSTANCE_HIERARCHY, HEADER_ARGUMENTS, SessionRegistry, SessionState,
+    HEADER_AGENT_FULL_ID, HEADER_AGENT_INSTANCE_HIERARCHY, SessionRegistry, SessionState,
 };
 
 #[derive(Debug, Clone)]
@@ -195,8 +197,10 @@ pub fn synthetic_initialize_message() -> ClientJsonRpcMessage {
     })
 }
 
-/// Pull the per-session identities off the request HTTP parts. Both are
-/// optional — the only hard error is a message with no injected parts.
+/// Pull the per-session identities off the request HTTP parts. Both the
+/// agent-full-id and agent-instance-hierarchy headers are required — a missing
+/// HTTP parts extension or a missing/empty identity header is an error, which
+/// rejects the connection (fresh or reconnect).
 fn extract_session_state(message: &ClientJsonRpcMessage) -> Result<SessionState, String> {
     let parts = match message {
         ClientJsonRpcMessage::Request(req) => {
@@ -209,26 +213,10 @@ fn extract_session_state(message: &ClientJsonRpcMessage) -> Result<SessionState,
     }
     .ok_or_else(|| "message missing injected HTTP parts extension".to_string())?;
 
-    // Parse X-OBJECTIVEAI-ARGUMENTS as a JSON object. Absent / malformed /
-    // non-object → empty map.
-    let args: serde_json::Map<String, serde_json::Value> = parts
-        .headers
-        .get(HEADER_ARGUMENTS)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| serde_json::from_str(s).ok())
-        .unwrap_or_default();
-
-    // AIH: prefer the dedicated header; fall back to the arguments map.
-    let agent_instance_hierarchy = parts
-        .headers
-        .get(HEADER_AGENT_INSTANCE_HIERARCHY)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .or_else(|| lookup_string_ci(&args, "agent_instance_hierarchy"));
-
-    // Agent full id: from the arguments map only.
-    let agent_full_id = lookup_string_ci(&args, "agent_full_id");
+    let agent_full_id = header_value(parts, HEADER_AGENT_FULL_ID)
+        .ok_or_else(|| format!("missing or empty {HEADER_AGENT_FULL_ID} header"))?;
+    let agent_instance_hierarchy = header_value(parts, HEADER_AGENT_INSTANCE_HIERARCHY)
+        .ok_or_else(|| format!("missing or empty {HEADER_AGENT_INSTANCE_HIERARCHY} header"))?;
 
     Ok(SessionState {
         agent_full_id,
@@ -236,15 +224,12 @@ fn extract_session_state(message: &ClientJsonRpcMessage) -> Result<SessionState,
     })
 }
 
-/// Case-insensitive key lookup over a JSON object: trimmed non-empty string,
-/// else `None`.
-fn lookup_string_ci(
-    map: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Option<String> {
-    map.iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case(key))
-        .and_then(|(_, v)| v.as_str())
+/// A request header's trimmed value, or `None` if absent, non-UTF-8, or empty.
+fn header_value(parts: &http::request::Parts, name: &str) -> Option<String> {
+    parts
+        .headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
