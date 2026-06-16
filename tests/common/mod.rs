@@ -117,6 +117,14 @@ pub fn mcp_agent(mut calls: Vec<mock::Call>) -> InlineAgentBase {
     InlineAgentBase::Mock(base)
 }
 
+/// What a test asks the harness to self-subscribe the spawned agent to (on
+/// the first chunk, via the CLI): a single key, or the whole key set.
+#[derive(Clone)]
+enum SelfSub {
+    Key(String),
+    Soul,
+}
+
 // ──────────────────────────────── the harness ──────────────────────────────
 
 /// A handle that runs mundus-animarum against one isolated objectiveai
@@ -379,13 +387,23 @@ impl Plugin {
     }
 
     /// Spawn an inline agent and, on the first chunk (once the agent's
-    /// identity is known), subscribe that agent to its OWN soul's `key` via
-    /// the CLI — before the agent runs its own `set`. Lets the agent's own
-    /// (fast, in-completion) `set` fire a notification it then reads, with
-    /// `set`→read ordered deterministically by the script. Breaks the
-    /// no-self-subscribe constraint without depending on the agent knowing
-    /// its content-hash full id.
+    /// identity is known), subscribe that agent to its OWN soul via the CLI —
+    /// before the agent runs its own `set`. Lets the agent's own (fast,
+    /// in-completion) `set` fire a notification it then reads/clears, with the
+    /// ordering fixed by the script. Breaks the no-self-subscribe constraint
+    /// without the agent needing to know its content-hash full id.
+    /// `SelfSub::Key` watches one key; `SelfSub::Soul` watches the key set.
     pub async fn spawn_self_sub_key(&self, agent: InlineAgentBase, key: &str) -> SpawnResult {
+        self.spawn_self_sub(agent, SelfSub::Key(key.to_string())).await
+    }
+
+    /// Like [`Self::spawn_self_sub_key`] but a whole-soul (key-set) self
+    /// subscription (cleared by `list`).
+    pub async fn spawn_self_sub_soul(&self, agent: InlineAgentBase) -> SpawnResult {
+        self.spawn_self_sub(agent, SelfSub::Soul).await
+    }
+
+    async fn spawn_self_sub(&self, agent: InlineAgentBase, sub: SelfSub) -> SpawnResult {
         let spec = InlineAgentBaseWithFallbacksOrRemoteCommitOptional::AgentBase(
             InlineAgentBaseWithFallbacks {
                 inner: agent,
@@ -395,8 +413,7 @@ impl Plugin {
         let agent = AgentSelector::Ref {
             agent: AgentRef::Resolved(spec),
         };
-        self.collect_spawn(agent, "", None, None, Some(key.to_string()))
-            .await
+        self.collect_spawn(agent, "", None, None, Some(sub)).await
     }
 
     /// Core: stream a seeded `agents spawn` for `selector` and collect the
@@ -406,16 +423,16 @@ impl Plugin {
     /// [`SpawnResult::triggered`]):
     /// - `cli_trigger = (needle, args)`: run the plugin CLI `args` the first
     ///   time a streamed item contains `needle`.
-    /// - `self_sub_key = Some(key)`: subscribe the agent to its own soul's
-    ///   `key` (`subscriber = AIH`, `target = full id`) once both are known
-    ///   (the first chunk).
+    /// - `self_sub = Some(SelfSub::…)`: subscribe the agent to its own soul
+    ///   (`subscriber = AIH`, `target = full id`) once both are known (the
+    ///   first chunk) — a single key or the whole key set.
     async fn collect_spawn(
         &self,
         selector: AgentSelector,
         message: &str,
         args: Option<AgentArguments>,
         mut cli_trigger: Option<(String, Vec<String>)>,
-        mut self_sub_key: Option<String>,
+        mut self_sub: Option<SelfSub>,
     ) -> SpawnResult {
         let req = agents_spawn::Request {
             path_type: agents_spawn::Path::AgentsSpawn,
@@ -463,14 +480,18 @@ impl Plugin {
             }
 
             // Self-subscribe: once the agent's identity is known, subscribe it
-            // to its own soul key via the CLI (before the agent's own set).
-            if let Some(key) = &self_sub_key {
+            // to its own soul via the CLI (before the agent's own set).
+            if let Some(sub) = &self_sub {
                 if let (Some(aih), Some(fid)) =
                     (&result.agent_instance_hierarchy, &result.agent_full_id)
                 {
-                    let (aih, fid, key) = (aih.clone(), fid.clone(), key.clone());
-                    self_sub_key = None;
-                    result.triggered = Some(self.cli_subscribe_key(&aih, &fid, &key).await);
+                    let (aih, fid) = (aih.clone(), fid.clone());
+                    let sub = sub.clone();
+                    self_sub = None;
+                    result.triggered = Some(match sub {
+                        SelfSub::Key(key) => self.cli_subscribe_key(&aih, &fid, &key).await,
+                        SelfSub::Soul => self.cli_subscribe_soul(&aih, &fid).await,
+                    });
                 }
             }
 

@@ -7,8 +7,9 @@
 //! effects are verified cross-channel through the identity-agnostic CLI —
 //! never the database or filesystem.
 //!
-//! Every MCP tool is covered: `get`, `set`, `delete`, `subscribe_key`,
-//! `subscribe_soul`, `unsubscribe_key`, `unsubscribe_soul`, `notifications`.
+//! Every MCP tool is covered: `get`, `list`, `set`, `delete`,
+//! `subscribe_key`, `subscribe_soul`, `unsubscribe_key`, `unsubscribe_soul`,
+//! `notifications`.
 
 mod common;
 
@@ -55,6 +56,37 @@ async fn mcp_get_other_soul() {
     let s = p.spawn(agent).await;
     s.assert_no_errors();
     assert_eq!(s.tool_jsons(), vec![json!("hello"), json!(null)]);
+}
+
+/// `list` returns a soul's keys (sorted) — your own by default, or another
+/// agent's when `agent_full_id` is given, exactly like `get`'s targeting.
+#[tokio::test]
+async fn mcp_list() {
+    let p = Plugin::new("mcp_list");
+    // pre-seed another agent's soul via the CLI.
+    p.cli_set("other-soul", "alpha", "1").await.assert_no_errors();
+    p.cli_set("other-soul", "beta", "2").await.assert_no_errors();
+
+    let agent = mcp_agent(vec![
+        call(tool("list", json!({}))), // own soul, still empty → []
+        call(tool("set", json!({ "key": "y", "value": "1" }))),
+        call(tool("set", json!({ "key": "x", "value": "2" }))),
+        call(tool("list", json!({}))), // own soul → [x, y] (sorted)
+        call(tool("list", json!({ "agent_full_id": "other-soul" }))), // → [alpha, beta]
+    ]);
+    let s = p.spawn(agent).await;
+    s.assert_no_errors();
+    s.assert_called("list");
+
+    let r = s.tool_jsons();
+    // own soul: empty before the sets, sorted keys after.
+    assert!(r.contains(&json!([])), "expected an empty own-soul listing in {r:?}");
+    assert!(r.contains(&json!(["x", "y"])), "expected sorted own-soul keys in {r:?}");
+    // another agent's soul, sorted.
+    assert!(
+        r.contains(&json!(["alpha", "beta"])),
+        "expected the other soul's keys in {r:?}",
+    );
 }
 
 /// `delete` removes a key from the agent's own soul and reports whether it
@@ -259,6 +291,37 @@ async fn mcp_notifications_cleared_by_read() {
         "expected the agent's own set+get to round-trip 'v'",
     );
     // reading the watched key cleared the notification, so it is empty.
+    let reads = s.notification_reads();
+    assert_eq!(reads, vec![json!({ "notifications": [], "remaining": 0 })]);
+}
+
+/// The soul-scope counterpart of [`mcp_notifications_cleared_by_read`]:
+/// listing the key set resolves a soul notification. The agent is
+/// self-subscribed to its own SOUL, sets a new key (growing the key set,
+/// which fires the soul notification), lists the keys (clearing it), then
+/// `notifications` is empty. Deterministic: set→list→notifications run
+/// sequentially in one completion.
+#[tokio::test]
+async fn mcp_notifications_cleared_by_list() {
+    let p = Plugin::new("mcp_notifications_cleared_list");
+
+    // Warm up first so the CLI self soul-subscribe lands before the set.
+    let mut calls = warmups(250);
+    calls.push(call(tool("set", json!({ "key": "k", "value": "v" })))); // new key → fires soul sub
+    calls.push(call(tool("list", json!({})))); // lists [k] AND clears the soul notification
+    calls.push(call(tool("notifications", json!({})))); // empty (cleared)
+    let agent = mcp_agent(calls);
+
+    let s = p.spawn_self_sub_soul(agent).await;
+    s.assert_no_errors();
+    assert!(s.triggered.as_ref().is_some_and(|t| t.errors.is_empty()));
+
+    // the agent listed its own soul and saw the key it set.
+    assert!(
+        s.tool_jsons().contains(&json!(["k"])),
+        "expected the agent's own list to return [k]",
+    );
+    // listing the key set cleared the soul notification, so it is empty.
     let reads = s.notification_reads();
     assert_eq!(reads, vec![json!({ "notifications": [], "remaining": 0 })]);
 }
