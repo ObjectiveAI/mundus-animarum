@@ -69,6 +69,12 @@ pub struct UnsubscribeSoulRequest {
     pub agent_full_id: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct NotificationsRequest {
+    #[schemars(description = "Maximum number of notifications to return (1–10). Defaults to 10.")]
+    pub count: Option<u32>,
+}
+
 #[tool_router(router = soul_tools, vis = "pub")]
 impl MundusAnimarumMcp {
     #[tool(name = "get", description = "Read the value of a key in your soul.")]
@@ -193,25 +199,35 @@ impl MundusAnimarumMcp {
 
     #[tool(
         name = "notifications",
-        description = "List your pending soul-change notifications."
+        description = "List your pending soul-change notifications (up to `count`, max 10)."
     )]
     async fn notifications(
         &self,
+        Parameters(req): Parameters<NotificationsRequest>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.resolve_session(&ctx.extensions).await?;
         let subscriber = require_agent_instance_hierarchy(&state)?;
-        let notifications = self.db.notifications(subscriber).await.map_err(db_err)?;
+        let limit = req.count.unwrap_or(10).min(10) as usize;
+        let all = self.db.notifications(subscriber).await.map_err(db_err)?;
+        // Return at most `limit`; `remaining` is how many pending notifications
+        // are NOT included in this result.
+        let remaining = all.len().saturating_sub(limit);
         // One JSON object per pending notification: a single-key change carries
         // `key`; a whole-soul (key-set) change carries `soul: true`.
-        let items: Vec<Value> = notifications
+        let items: Vec<Value> = all
             .into_iter()
+            .take(limit)
             .map(|n| match n.scope {
                 Scope::Key(key) => serde_json::json!({ "target": n.target, "key": key }),
                 Scope::Soul => serde_json::json!({ "target": n.target, "soul": true }),
             })
             .collect();
-        let body = serde_json::to_string(&Value::Array(items)).map_err(json_err)?;
+        let body = serde_json::to_string(&serde_json::json!({
+            "notifications": items,
+            "remaining": remaining,
+        }))
+        .map_err(json_err)?;
         Ok(CallToolResult::success(vec![Content::text(body)]))
     }
 }

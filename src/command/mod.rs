@@ -16,7 +16,6 @@ pub mod delete;
 pub mod get;
 pub mod list;
 pub mod mcp;
-pub mod notifications;
 pub mod set;
 pub mod subscribe;
 pub mod unsubscribe;
@@ -43,8 +42,6 @@ pub(crate) enum Commands {
     Subscribe(subscribe::Args),
     /// Stop watching another agent's soul.
     Unsubscribe(unsubscribe::Args),
-    /// List the caller's pending soul-change notifications.
-    Notifications(notifications::Args),
     /// MCP server management (`mcp mundus-animarum begin`).
     Mcp {
         #[command(subcommand)]
@@ -61,7 +58,6 @@ impl Commands {
             Commands::Delete(args) => args.run(ctx).await,
             Commands::Subscribe(args) => args.run(ctx).await,
             Commands::Unsubscribe(args) => args.run(ctx).await,
-            Commands::Notifications(args) => args.run(ctx).await,
             Commands::Mcp { command } => command.run(ctx).await,
         }
     }
