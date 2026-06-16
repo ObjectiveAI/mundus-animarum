@@ -1,3 +1,6 @@
 /target
 **/*.rs.bk
 *.pdb
+# Integration-test scratch (populated by test.sh)
+/.objectiveai/
+/bin/

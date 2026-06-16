@@ -31,3 +31,11 @@ sqlx = { version = "0.9.0", features = ["postgres", "runtime-tokio"] }
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "sync", "net"] }
 tokio-util = "0.7.18"
+
+[dev-dependencies]
+# Integration tests drive the installed plugin through the objectiveai host via
+# the SDK's BinaryExecutor (cli-executor). This is dev-only — the released
+# binary keeps just the `cli` feature. (futures + tokio-util are already normal
+# deps; tokio gains the `process` feature here for BinaryExecutor's spawns.)
+objectiveai-sdk = { version = "2.2.0", default-features = false, features = ["cli", "cli-executor"] }
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "process"] }
