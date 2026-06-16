@@ -1,0 +1,80 @@
+name: release
+
+# Fires when Cargo.toml changes on main. The prepare job only cuts a release
+# when the version is new (no existing v<version> tag), so a Cargo.toml edit
+# that doesn't bump the version is a no-op.
+on:
+  push:
+    branches: [main]
+    paths: ["Cargo.toml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      should_release: ${{ steps.v.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version, create release if new
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if gh release view "v$VERSION" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists — nothing to do."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            gh release create "v$VERSION" \
+              --repo "${{ github.repository }}" \
+              --target "$GITHUB_SHA" \
+              --title "v$VERSION" \
+              --generate-notes
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows, runner: windows-latest,  target: x86_64-pc-windows-msvc,     zip: mundus-animarum-windows-x86_64.zip }
+          - { os: windows, runner: windows-11-arm,   target: aarch64-pc-windows-msvc,    zip: mundus-animarum-windows-aarch64.zip }
+          - { os: linux,   runner: ubuntu-22.04,     target: x86_64-unknown-linux-musl,  zip: mundus-animarum-linux-x86_64.zip }
+          - { os: linux,   runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, zip: mundus-animarum-linux-aarch64.zip }
+          - { os: macos,   runner: macos-13,         target: x86_64-apple-darwin,        zip: mundus-animarum-macos-x86_64.zip }
+          - { os: macos,   runner: macos-14,         target: aarch64-apple-darwin,       zip: mundus-animarum-macos-aarch64.zip }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install musl tools
+        if: matrix.os == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        # musl-gcc (from musl-tools) is the linker for the static musl targets;
+        # only the matching target's var is consulted, so setting both is safe.
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Package (unix)
+        if: matrix.os != 'windows'
+        run: zip -j "${{ matrix.zip }}" "target/${{ matrix.target }}/release/mundus-animarum"
+      - name: Package (windows)
+        if: matrix.os == 'windows'
+        run: Compress-Archive -Path "target/${{ matrix.target }}/release/mundus-animarum.exe" -DestinationPath "${{ matrix.zip }}"
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "v${{ needs.prepare.outputs.version }}" "${{ matrix.zip }}" --repo "${{ github.repository }}" --clobber

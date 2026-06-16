@@ -9,9 +9,9 @@
     "macos": ["./mundus-animarum"]
   },
   "cli_zip": {
-    "windows": "mundus-animarum-windows-x86_64.zip",
-    "linux": "mundus-animarum-linux-x86_64.zip",
-    "macos": "mundus-animarum-macos-x86_64.zip"
+    "windows": { "x86_64": "mundus-animarum-windows-x86_64.zip", "aarch64": "mundus-animarum-windows-aarch64.zip" },
+    "linux": { "x86_64": "mundus-animarum-linux-x86_64.zip", "aarch64": "mundus-animarum-linux-aarch64.zip" },
+    "macos": { "x86_64": "mundus-animarum-macos-x86_64.zip", "aarch64": "mundus-animarum-macos-aarch64.zip" }
   },
   "mcp_servers": [
     { "name": "mundus-animarum", "authorization": false }
