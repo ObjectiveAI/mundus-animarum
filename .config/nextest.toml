@@ -1,0 +1,12 @@
+# Integration tests each boot a per-state postgres and spawn the objectiveai
+# host (plus, for MCP tests, plugin subprocesses). Run serially: the
+# notification tests fire a CLI `set` mid-completion (a process spawn) and
+# rely on it committing before the agent's read; concurrent tests inflate
+# that spawn latency and make it race. Serial keeps it fast and predictable.
+[profile.default]
+test-threads = 1
+
+# Don't fail the run on the nextest "leaky" warning: a mock-agent completion
+# brings up the plugin as a DETACHED MCP server (Windows) that outlives the
+# test; test.sh's kill_plugins reaps it between runs.
+leak-timeout = "2s"
