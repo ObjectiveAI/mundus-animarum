@@ -157,6 +157,23 @@ impl Plugin {
     /// Run an arbitrary plugin command (the plugin's own argv) and collect
     /// the response into a [`RunResult`].
     pub async fn run(&self, args: Vec<String>) -> RunResult {
+        self.run_with(args, None).await
+    }
+
+    /// Run a CLI command **as a specific agent** — its instance hierarchy is
+    /// forwarded to the plugin as `ctx.caller()` (so identity-sensitive
+    /// behavior, like which subscription a read would resolve, uses `aih`).
+    pub async fn cli_as(&self, aih: &str, args: &[&str]) -> RunResult {
+        let agent_args = AgentArguments {
+            agent_instance_hierarchy: Some(aih.to_string()),
+            ..Default::default()
+        };
+        self.run_with(args.iter().map(|s| s.to_string()).collect(), Some(agent_args))
+            .await
+    }
+
+    /// Core CLI dispatch, optionally with a per-call agent identity.
+    async fn run_with(&self, args: Vec<String>, agent_args: Option<AgentArguments>) -> RunResult {
         let label = args.join(" ");
         let request = plugins_run::Request {
             path_type: plugins_run::Path::PluginsRun,
@@ -168,7 +185,7 @@ impl Plugin {
         };
         let mut stream = self
             .executor
-            .execute::<_, plugins_run::ResponseItem>(request, None)
+            .execute::<_, plugins_run::ResponseItem>(request, agent_args.as_ref())
             .await
             .unwrap_or_else(|e| panic!("[{}] execute `{label}`: {e}", self.state));
 
@@ -343,32 +360,37 @@ impl Plugin {
     }
 
     /// Spawn an inline agent and, the first time the streamed completion
-    /// contains `trigger`, run a plugin CLI command (`cli_args`) — pausing
-    /// the stream read while it runs. Used for the notification flow: the
-    /// agent subscribes (the `trigger`), a CLI `set`/`delete` fires the
-    /// change, then the agent (held behind warmup calls by stdout
-    /// backpressure while the read is paused) reads its notification. The
-    /// fired command's result is stored on [`SpawnResult::triggered`].
+    /// contains `trigger`, run a plugin CLI command (`cli_args`). Used for the
+    /// notification flow: the agent subscribes (the `trigger`), a CLI `set`
+    /// fires the change, and the agent later reads it. The command is run AS
+    /// the agent (caller = its AIH) with `{FID}`/`{AIH}` substituted; its
+    /// result is stored on [`SpawnResult::triggered`].
     pub async fn spawn_then_cli(
         &self,
         agent: InlineAgentBase,
         trigger: &str,
         cli_args: &[&str],
     ) -> SpawnResult {
-        let spec = InlineAgentBaseWithFallbacksOrRemoteCommitOptional::AgentBase(
-            InlineAgentBaseWithFallbacks {
-                inner: agent,
-                fallbacks: None,
-            },
-        );
-        let agent = AgentSelector::Ref {
-            agent: AgentRef::Resolved(spec),
-        };
-        let trig = (
-            trigger.to_string(),
-            cli_args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-        );
-        self.collect_spawn(agent, "", None, Some(trig), None).await
+        self.spawn_then_clis(agent, trigger, &[cli_args]).await
+    }
+
+    /// Like [`Self::spawn_then_cli`] but runs several CLI commands in sequence
+    /// on the trigger (e.g. a `set` to fire a notification, then a `get`/`list`
+    /// to test whether reading resolves it). The last command's result is
+    /// stored on [`SpawnResult::triggered`].
+    pub async fn spawn_then_clis(
+        &self,
+        agent: InlineAgentBase,
+        trigger: &str,
+        commands: &[&[&str]],
+    ) -> SpawnResult {
+        let agent = Self::resolved(agent);
+        let cmds: Vec<Vec<String>> = commands
+            .iter()
+            .map(|c| c.iter().map(|s| s.to_string()).collect())
+            .collect();
+        self.collect_spawn(agent, "", None, Some((trigger.to_string(), cmds)), None)
+            .await
     }
 
     /// Resume an existing agent instance (by its AIH) with a new message.
@@ -404,25 +426,30 @@ impl Plugin {
     }
 
     async fn spawn_self_sub(&self, agent: InlineAgentBase, sub: SelfSub) -> SpawnResult {
+        let agent = Self::resolved(agent);
+        self.collect_spawn(agent, "", None, None, Some(sub)).await
+    }
+
+    /// Wrap an inline agent as a resolved `AgentSelector::Ref`.
+    fn resolved(agent: InlineAgentBase) -> AgentSelector {
         let spec = InlineAgentBaseWithFallbacksOrRemoteCommitOptional::AgentBase(
             InlineAgentBaseWithFallbacks {
                 inner: agent,
                 fallbacks: None,
             },
         );
-        let agent = AgentSelector::Ref {
+        AgentSelector::Ref {
             agent: AgentRef::Resolved(spec),
-        };
-        self.collect_spawn(agent, "", None, None, Some(sub)).await
+        }
     }
 
     /// Core: stream a seeded `agents spawn` for `selector` and collect the
     /// completion into a [`SpawnResult`].
     ///
-    /// Two optional mid-stream actions (each fired once, result stored on
+    /// Two optional mid-stream actions (fired once, last result stored on
     /// [`SpawnResult::triggered`]):
-    /// - `cli_trigger = (needle, args)`: run the plugin CLI `args` the first
-    ///   time a streamed item contains `needle`.
+    /// - `cli_trigger = (needle, commands)`: the first time a streamed item
+    ///   contains `needle`, run each plugin CLI command in sequence.
     /// - `self_sub = Some(SelfSub::…)`: subscribe the agent to its own soul
     ///   (`subscriber = AIH`, `target = full id`) once both are known (the
     ///   first chunk) — a single key or the whole key set.
@@ -431,7 +458,7 @@ impl Plugin {
         selector: AgentSelector,
         message: &str,
         args: Option<AgentArguments>,
-        mut cli_trigger: Option<(String, Vec<String>)>,
+        mut cli_trigger: Option<(String, Vec<Vec<String>>)>,
         mut self_sub: Option<SelfSub>,
     ) -> SpawnResult {
         let req = agents_spawn::Request {
@@ -495,13 +522,37 @@ impl Plugin {
                 }
             }
 
-            // CLI trigger: run a plugin CLI command on the first matching item.
-            if let Some((needle, cli_args)) = &cli_trigger {
+            // CLI trigger: on the first matching item, run each plugin CLI
+            // command in sequence. `{FID}`/`{AIH}` in the args are substituted
+            // with the captured identity, and each command runs AS the agent
+            // (caller = its instance hierarchy) so identity-sensitive behavior
+            // (e.g. which subscription a read would resolve) matches the agent.
+            if let Some((needle, commands)) = &cli_trigger {
                 if serialized.contains(needle.as_str()) {
-                    let cli_args = cli_args.clone();
+                    let aih = result.agent_instance_hierarchy.clone();
+                    let fid = result.agent_full_id.clone();
+                    let commands = commands.clone();
                     cli_trigger = None;
-                    let argv: Vec<&str> = cli_args.iter().map(String::as_str).collect();
-                    result.triggered = Some(self.cli(&argv).await);
+                    for command in &commands {
+                        let args: Vec<String> = command
+                            .iter()
+                            .map(|a| {
+                                let mut a = a.clone();
+                                if let Some(fid) = &fid {
+                                    a = a.replace("{FID}", fid);
+                                }
+                                if let Some(aih) = &aih {
+                                    a = a.replace("{AIH}", aih);
+                                }
+                                a
+                            })
+                            .collect();
+                        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+                        result.triggered = Some(match &aih {
+                            Some(aih) => self.cli_as(aih, &argv).await,
+                            None => self.cli(&argv).await,
+                        });
+                    }
                 }
             }
 

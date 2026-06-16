@@ -93,16 +93,17 @@ impl MundusAnimarumMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.resolve_session(&ctx.extensions).await?;
-        // The reader (whose subscription this read clears) is your instance
-        // hierarchy — subscriptions and notifications are owned by it, not by
-        // the agent full id. The *target* soul is yours by default (your full
-        // id), or another agent's when `agent_full_id` is given.
+        // An MCP read resolves the reader's notification: the reader (whose
+        // subscription this read clears) is your instance hierarchy —
+        // subscriptions/notifications are owned by it, not the agent full id.
+        // The *target* soul is yours by default (your full id), or another
+        // agent's when `agent_full_id` is given.
         let reader = state.agent_instance_hierarchy.as_str();
         let target = req
             .agent_full_id
             .as_deref()
             .unwrap_or(state.agent_full_id.as_str());
-        let value = self.db.get_key(reader, target, &req.key).await.map_err(db_err)?;
+        let value = self.db.get_key(Some(reader), target, &req.key).await.map_err(db_err)?;
         let body = serde_json::to_string(&value.map_or(Value::Null, Value::String))
             .map_err(json_err)?;
         Ok(CallToolResult::success(vec![Content::text(body)]))
@@ -118,15 +119,15 @@ impl MundusAnimarumMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.resolve_session(&ctx.extensions).await?;
-        // Like `get`, but for the whole key set: the reader (whose soul
-        // subscription this listing clears) is your instance hierarchy; the
+        // Like `get`, but for the whole key set: an MCP listing resolves the
+        // reader's soul notification — reader is your instance hierarchy; the
         // target soul is yours by default, or another agent's when given.
         let reader = state.agent_instance_hierarchy.as_str();
         let target = req
             .agent_full_id
             .as_deref()
             .unwrap_or(state.agent_full_id.as_str());
-        let keys = self.db.list_keys(reader, target).await.map_err(db_err)?;
+        let keys = self.db.list_keys(Some(reader), target).await.map_err(db_err)?;
         let body = serde_json::to_string(&keys).map_err(json_err)?;
         Ok(CallToolResult::success(vec![Content::text(body)]))
     }

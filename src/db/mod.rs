@@ -125,9 +125,16 @@ impl Db {
 
     /// List every soul key owned by `target`.
     ///
-    /// Performed by `reader`: clears `reader`'s soul subscription on `target`,
-    /// if any (it marks the pending notification read).
-    pub async fn list_keys(&self, reader: &str, target: &str) -> Result<Vec<String>, sqlx::Error> {
+    /// `reader = Some(r)`: clears `r`'s soul subscription on `target`, if any
+    /// (marks the pending notification read). `reader = None`: a read-only
+    /// listing that resolves nothing — the CLI passes this so an operator
+    /// inspecting a soul never resolves an agent's notifications (only the
+    /// agent's own MCP reads do).
+    pub async fn list_keys(
+        &self,
+        reader: Option<&str>,
+        target: &str,
+    ) -> Result<Vec<String>, sqlx::Error> {
         let rows: Vec<(String,)> =
             sqlx::query_as("SELECT key FROM souls WHERE agent = $1 ORDER BY key")
                 .bind(target)
@@ -135,24 +142,30 @@ impl Db {
                 .await?;
 
         // Reading the key set clears the reader's soul subscription, if any.
-        sqlx::query(
-            "UPDATE soul_subscriptions SET unread = FALSE WHERE subscriber = $1 AND target = $2",
-        )
-        .bind(reader)
-        .bind(target)
-        .execute(&self.pool)
-        .await?;
+        if let Some(reader) = reader {
+            sqlx::query(
+                "UPDATE soul_subscriptions SET unread = FALSE WHERE subscriber = $1 AND target = $2",
+            )
+            .bind(reader)
+            .bind(target)
+            .execute(&self.pool)
+            .await?;
+        }
 
         Ok(rows.into_iter().map(|(k,)| k).collect())
     }
 
     /// Retrieve the value of `target`'s soul `key`, or `None` if unset.
     ///
-    /// Performed by `reader`: clears `reader`'s key subscription on
-    /// `(target, key)`, if any (it marks the pending notification read).
+    /// `reader = Some(r)`: clears `r`'s key subscription on `(target, key)`,
+    /// if any (marks the pending notification read) — regardless of whether
+    /// the value still exists (a deletion-then-read still clears it).
+    /// `reader = None`: a read-only get that resolves nothing — the CLI passes
+    /// this so inspecting a soul never resolves an agent's notifications (only
+    /// the agent's own MCP reads do).
     pub async fn get_key(
         &self,
-        reader: &str,
+        reader: Option<&str>,
         target: &str,
         key: &str,
     ) -> Result<Option<String>, sqlx::Error> {
@@ -163,18 +176,17 @@ impl Db {
                 .fetch_optional(&self.pool)
                 .await?;
 
-        // Reading the value clears the reader's key subscription, if any —
-        // regardless of whether the value still exists (a deletion-then-read
-        // still clears the pending notification).
-        sqlx::query(
-            "UPDATE key_subscriptions SET unread = FALSE \
-             WHERE subscriber = $1 AND target = $2 AND key = $3",
-        )
-        .bind(reader)
-        .bind(target)
-        .bind(key)
-        .execute(&self.pool)
-        .await?;
+        if let Some(reader) = reader {
+            sqlx::query(
+                "UPDATE key_subscriptions SET unread = FALSE \
+                 WHERE subscriber = $1 AND target = $2 AND key = $3",
+            )
+            .bind(reader)
+            .bind(target)
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        }
 
         Ok(row.map(|(v,)| v))
     }
