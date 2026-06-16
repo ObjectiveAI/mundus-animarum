@@ -6,7 +6,10 @@ use crate::context::Context;
 use crate::db::Scope;
 
 /// Exactly one of `--key` (a single key) or `--soul` (the whole key set),
-/// plus the required `--agent-full-id` of the target agent to watch.
+/// plus the required `--agent-full-id` of the target agent to watch. The
+/// subscription owner defaults to the configured instance hierarchy, narrowed
+/// by the optional `--agent-instance` / `--parent-agent-instance-hierarchy`
+/// selector.
 #[derive(Debug, Args)]
 #[command(group = ArgGroup::new("scope")
     .required(true)
@@ -24,6 +27,15 @@ pub struct SubscriptionArgs {
     /// is allowed to watch its own.
     #[arg(long)]
     pub agent_full_id: String,
+    /// Own the subscription as `<configured AIH>/<agent_instance>` (or
+    /// `<parent>/<agent_instance>` when `--parent-agent-instance-hierarchy`
+    /// is given). Omitted ⇒ the configured instance hierarchy itself.
+    #[arg(long)]
+    pub agent_instance: Option<String>,
+    /// Explicit parent hierarchy for `--agent-instance`. Only valid alongside
+    /// it.
+    #[arg(long, requires = "agent_instance")]
+    pub parent_agent_instance_hierarchy: Option<String>,
 }
 
 /// A resolved subscription: who is watching (`caller`, an agent instance
@@ -36,10 +48,15 @@ pub struct Resolved {
 }
 
 impl SubscriptionArgs {
-    /// Resolve against the caller's instance hierarchy. Self-subscription
+    /// Resolve the subscription. The owner (`caller`) is the configured
+    /// instance hierarchy narrowed by the `--agent-instance` /
+    /// `--parent-agent-instance-hierarchy` selector. Self-subscription
     /// (watching your own full id) is allowed.
     pub fn resolve(self, ctx: &Context) -> Resolved {
-        let caller = ctx.caller().to_string();
+        let caller = ctx.agent_instance_hierarchy(
+            self.agent_instance,
+            self.parent_agent_instance_hierarchy,
+        );
         let target = self.agent_full_id;
         // The `scope` ArgGroup guarantees exactly one of key/soul is set, so
         // `key.is_none()` means `--soul` was given.

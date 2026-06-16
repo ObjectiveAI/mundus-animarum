@@ -62,6 +62,25 @@ impl Context {
         arg.or_else(|| self.config.objectiveai_agent_full_id.clone())
             .ok_or(Error::AgentFullIdRequired)
     }
+
+    /// Resolve the subscription-owner AIH from the optional instance selector:
+    /// - neither given: the configured AIH ([`caller`](Context::caller));
+    /// - `agent_instance` only: `<configured AIH>/<agent_instance>`;
+    /// - `parent` + `agent_instance`: `<parent>/<agent_instance>`.
+    ///
+    /// (`parent` without `agent_instance` is rejected by clap, so that case
+    /// never reaches here.)
+    pub fn agent_instance_hierarchy(
+        &self,
+        agent_instance: Option<String>,
+        parent_agent_instance_hierarchy: Option<String>,
+    ) -> String {
+        match (agent_instance, parent_agent_instance_hierarchy) {
+            (None, _) => self.caller().to_string(),
+            (Some(instance), None) => format!("{}/{instance}", self.caller()),
+            (Some(instance), Some(parent)) => format!("{parent}/{instance}"),
+        }
+    }
 }
 
 impl Default for Context {
