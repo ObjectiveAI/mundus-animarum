@@ -83,12 +83,16 @@ impl MundusAnimarumMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.resolve_session(&ctx.extensions).await?;
-        // Reader is always you (clears your subscription on the key you read);
-        // target is the soul you're reading — yours by default, or another
-        // agent's when `agent_full_id` is given.
-        let me = state.agent_full_id.as_str();
-        let target = req.agent_full_id.as_deref().unwrap_or(me);
-        let value = self.db.get_key(me, target, &req.key).await.map_err(db_err)?;
+        // The reader (whose subscription this read clears) is your instance
+        // hierarchy — subscriptions and notifications are owned by it, not by
+        // the agent full id. The *target* soul is yours by default (your full
+        // id), or another agent's when `agent_full_id` is given.
+        let reader = state.agent_instance_hierarchy.as_str();
+        let target = req
+            .agent_full_id
+            .as_deref()
+            .unwrap_or(state.agent_full_id.as_str());
+        let value = self.db.get_key(reader, target, &req.key).await.map_err(db_err)?;
         let body = serde_json::to_string(&value.map_or(Value::Null, Value::String))
             .map_err(json_err)?;
         Ok(CallToolResult::success(vec![Content::text(body)]))

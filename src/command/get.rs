@@ -20,7 +20,9 @@ impl Args {
     pub async fn run(self, ctx: &Context) -> Result<serde_json::Value, Error> {
         let agent = ctx.agent_full_id(self.agent_full_id)?;
         let db = ctx.db().await?;
-        let value = db.get_key(&agent, &agent, &self.key).await?;
+        // The reader (whose subscription this read clears) is the caller's
+        // instance hierarchy — subscriptions are owned by it, not the full id.
+        let value = db.get_key(ctx.caller(), &agent, &self.key).await?;
         Ok(value.map_or(serde_json::Value::Null, serde_json::Value::String))
     }
 }
