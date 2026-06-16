@@ -199,7 +199,9 @@ impl MundusAnimarumMcp {
 
     #[tool(
         name = "notifications",
-        description = "List your pending soul-change notifications (up to `count`, max 10)."
+        description = "Read up to `count` (max 10) of your pending soul-change notifications. \
+                       Returned notifications are marked resolved and won't appear again until \
+                       the soul changes once more; `remaining` reports how many are still pending."
     )]
     async fn notifications(
         &self,
@@ -208,16 +210,18 @@ impl MundusAnimarumMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.resolve_session(&ctx.extensions).await?;
         let subscriber = require_agent_instance_hierarchy(&state)?;
-        let limit = req.count.unwrap_or(10).min(10) as usize;
-        let all = self.db.notifications(subscriber).await.map_err(db_err)?;
-        // Return at most `limit`; `remaining` is how many pending notifications
-        // are NOT included in this result.
-        let remaining = all.len().saturating_sub(limit);
-        // One JSON object per pending notification: a single-key change carries
-        // `key`; a whole-soul (key-set) change carries `soul: true`.
-        let items: Vec<Value> = all
+        let limit = req.count.unwrap_or(10).min(10);
+        // Atomically claim (resolve) up to `limit` notifications and report how
+        // many remain — safe under concurrent reads (see Db::take_notifications).
+        let (notifications, remaining) = self
+            .db
+            .take_notifications(subscriber, limit)
+            .await
+            .map_err(db_err)?;
+        // One JSON object per notification: a single-key change carries `key`;
+        // a whole-soul (key-set) change carries `soul: true`.
+        let items: Vec<Value> = notifications
             .into_iter()
-            .take(limit)
             .map(|n| match n.scope {
                 Scope::Key(key) => serde_json::json!({ "target": n.target, "key": key }),
                 Scope::Soul => serde_json::json!({ "target": n.target, "soul": true }),

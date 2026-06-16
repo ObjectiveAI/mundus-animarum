@@ -34,9 +34,10 @@ pub struct Notification {
 /// Agents can **subscribe** to another agent's soul — either to a single key
 /// (value changes and deletion of that key) or to the whole key set (key
 /// additions and deletions). Subscriptions form a coalesced notification queue:
-/// at most one pending notification per subscription, cleared when the
-/// subscriber reads the subscribed data (reading a key clears that key's
-/// notification; listing the keys clears the soul notification).
+/// at most one pending notification per subscription, cleared either by reading
+/// the subscribed data (reading a key clears that key's notification; listing
+/// the keys clears the soul notification) or by claiming it from the
+/// notification queue (see [`take_notifications`](Db::take_notifications)).
 ///
 /// This type is **identity-agnostic**: it has no notion of a "current" or
 /// "self" agent. Every operation names the agent(s) it acts on by explicit ID.
@@ -312,25 +313,76 @@ impl Db {
 
     // ---- Notification queue ----
 
-    /// List `subscriber`'s pending (unread) notifications. Does NOT mark
-    /// anything read — a notification is cleared only by reading the subscribed
-    /// data (see [`get_key`](Self::get_key) / [`list_keys`](Self::list_keys)).
-    pub async fn notifications(&self, subscriber: &str) -> Result<Vec<Notification>, sqlx::Error> {
+    /// Claim up to `limit` of `subscriber`'s pending notifications: return them
+    /// **and mark exactly those resolved** in the same transaction, plus a
+    /// count of how many pending notifications remain.
+    ///
+    /// Concurrency (built for high parallelism): the whole operation is one
+    /// transaction, and each batch is claimed with `FOR UPDATE SKIP LOCKED`. So
+    /// any number of parallel callers — even for the same subscriber — take
+    /// **disjoint** batches: no double-claim, no lost notification, and no
+    /// caller blocks another (locked rows are skipped, not waited on). A
+    /// concurrent write (`set_key`/`delete_key`) that re-raises a row is either
+    /// seen before the claim (and may be taken) or re-fires after it — row
+    /// locks serialize the two, so it is never dropped. Key notifications are
+    /// claimed before soul ones, each picked in `(target, key)` / `target`
+    /// order under the `LIMIT`. `remaining` is counted after the claim within
+    /// the same transaction (own claims already excluded); under heavy
+    /// concurrency it is an upper bound — it may include rows another in-flight
+    /// claim is about to resolve — never an undercount.
+    pub async fn take_notifications(
+        &self,
+        subscriber: &str,
+        limit: u32,
+    ) -> Result<(Vec<Notification>, u64), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        // Claim (resolve) up to `limit` key notifications, returning exactly
+        // those. SKIP LOCKED means parallel claims never collide.
         let key_rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT target, key FROM key_subscriptions \
-             WHERE subscriber = $1 AND unread ORDER BY target, key",
+            "UPDATE key_subscriptions SET unread = FALSE \
+             WHERE (subscriber, target, key) IN ( \
+                 SELECT subscriber, target, key FROM key_subscriptions \
+                 WHERE subscriber = $1 AND unread \
+                 ORDER BY target, key LIMIT $2 FOR UPDATE SKIP LOCKED \
+             ) RETURNING target, key",
         )
         .bind(subscriber)
-        .fetch_all(&self.pool)
+        .bind(i64::from(limit))
+        .fetch_all(&mut *tx)
         .await?;
 
-        let soul_rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT target FROM soul_subscriptions \
-             WHERE subscriber = $1 AND unread ORDER BY target",
+        // Fill the remaining budget with soul notifications.
+        let soul_limit = i64::from(limit) - key_rows.len() as i64;
+        let soul_rows: Vec<(String,)> = if soul_limit > 0 {
+            sqlx::query_as(
+                "UPDATE soul_subscriptions SET unread = FALSE \
+                 WHERE (subscriber, target) IN ( \
+                     SELECT subscriber, target FROM soul_subscriptions \
+                     WHERE subscriber = $1 AND unread \
+                     ORDER BY target LIMIT $2 FOR UPDATE SKIP LOCKED \
+                 ) RETURNING target",
+            )
+            .bind(subscriber)
+            .bind(soul_limit)
+            .fetch_all(&mut *tx)
+            .await?
+        } else {
+            Vec::new()
+        };
+
+        // Count what's still pending, in the same transaction — our own claims
+        // are already excluded since they were set FALSE above.
+        let (remaining,): (i64,) = sqlx::query_as(
+            "SELECT \
+                (SELECT count(*) FROM key_subscriptions WHERE subscriber = $1 AND unread) \
+              + (SELECT count(*) FROM soul_subscriptions WHERE subscriber = $1 AND unread)",
         )
         .bind(subscriber)
-        .fetch_all(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         let mut out = Vec::with_capacity(key_rows.len() + soul_rows.len());
         for (target, key) in key_rows {
@@ -345,6 +397,6 @@ impl Db {
                 scope: Scope::Soul,
             });
         }
-        Ok(out)
+        Ok((out, remaining as u64))
     }
 }
