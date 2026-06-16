@@ -1,0 +1,19 @@
+{
+  "owner": "ObjectiveAI",
+  "name": "mundus-animarum",
+  "version": "0.1.0",
+  "description": "Soul storage for ObjectiveAI agents — a persistent, self-authored key/value store per agent, with cross-agent subscriptions and change notifications, exposed over MCP.",
+  "exec": {
+    "windows": ["./mundus-animarum.exe"],
+    "linux": ["./mundus-animarum"],
+    "macos": ["./mundus-animarum"]
+  },
+  "cli_zip": {
+    "windows": "mundus-animarum-windows-x86_64.zip",
+    "linux": "mundus-animarum-linux-x86_64.zip",
+    "macos": "mundus-animarum-macos-x86_64.zip"
+  },
+  "mcp_servers": [
+    { "name": "mundus-animarum", "authorization": false }
+  ]
+}

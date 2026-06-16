@@ -1,6 +1,6 @@
 [package]
 name = "mundus-animarum"
-version = "1.0.0"
+version = "0.1.0"
 edition = "2024"
 authors = ["ObjectiveAI <admin@objectiveai.dev>"]
 description = "Command-line interface for mundus-animarum — the world of ObjectiveAI agent souls."
