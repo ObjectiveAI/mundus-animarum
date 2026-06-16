@@ -25,6 +25,15 @@ pub struct Notification {
     pub scope: Scope,
 }
 
+/// A subscription held by a subscriber.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Subscription {
+    /// The agent whose soul is watched.
+    pub target: String,
+    /// What is watched — a single key, or the whole key set.
+    pub scope: Scope,
+}
+
 /// Postgres-backed storage for agent souls and soul-change subscriptions.
 ///
 /// A *soul* is a mutable, self-authored `key → value` store bound to an
@@ -309,6 +318,44 @@ impl Db {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// List every subscription owned by `subscriber` (read-only). Key
+    /// subscriptions come before soul ones, each in `(target, key)` / `target`
+    /// order.
+    pub async fn subscriptions(
+        &self,
+        subscriber: &str,
+    ) -> Result<Vec<Subscription>, sqlx::Error> {
+        let key_rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT target, key FROM key_subscriptions \
+             WHERE subscriber = $1 ORDER BY target, key",
+        )
+        .bind(subscriber)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let soul_rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT target FROM soul_subscriptions WHERE subscriber = $1 ORDER BY target",
+        )
+        .bind(subscriber)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(key_rows.len() + soul_rows.len());
+        for (target, key) in key_rows {
+            out.push(Subscription {
+                target,
+                scope: Scope::Key(key),
+            });
+        }
+        for (target,) in soul_rows {
+            out.push(Subscription {
+                target,
+                scope: Scope::Soul,
+            });
+        }
+        Ok(out)
     }
 
     // ---- Notification queue ----
