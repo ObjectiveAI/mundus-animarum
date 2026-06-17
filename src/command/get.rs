@@ -20,7 +20,10 @@ impl Args {
     pub async fn run(self, ctx: &Context) -> Result<serde_json::Value, Error> {
         let agent = ctx.agent_full_id(self.agent_full_id)?;
         let db = ctx.db().await?;
-        let value = db.get_key(&agent, &agent, &self.key).await?;
+        // A CLI read does NOT resolve notifications (`reader = None`): only an
+        // agent's own MCP read clears its subscription. An operator inspecting
+        // a soul from the CLI must not resolve that agent's notifications.
+        let value = db.get_key(None, &agent, &self.key).await?;
         Ok(value.map_or(serde_json::Value::Null, serde_json::Value::String))
     }
 }

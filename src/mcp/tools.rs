@@ -1,12 +1,14 @@
-//! The soul tools: `get` / `set` / `delete`, `subscribe_key` /
+//! The soul tools: `get` / `list` / `set` / `delete`, `subscribe_key` /
 //! `subscribe_soul`, `unsubscribe_key` / `unsubscribe_soul`, and
 //! `notifications`.
 //!
-//! Identity is per-session, not per-call. The soul owner (for get/set/delete)
-//! is the session's agent full id; the subscription owner (for the
-//! subscribe/unsubscribe/notifications tools) is the session's agent instance
-//! hierarchy — both pulled from request headers (see [`super::session`]). The
-//! *target* of a subscription is a tool argument.
+//! Identity is per-session, not per-call. The soul owner (for set/delete) is
+//! the session's agent full id; the subscription owner (for the
+//! subscribe/unsubscribe/notifications tools, and the reader that `get`/`list`
+//! clear notifications for) is the session's agent instance hierarchy — both
+//! pulled from request headers (see [`super::session`]). The *target* of a
+//! subscription, and the soul `get`/`list` read, is a tool argument
+//! (defaulting to your own soul).
 
 use rmcp::model::{CallToolResult, Content};
 use rmcp::service::RequestContext;
@@ -22,6 +24,14 @@ pub struct GetRequest {
     pub key: String,
     #[schemars(
         description = "Full id of the agent whose soul to read. Defaults to your own soul when omitted."
+    )]
+    pub agent_full_id: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ListRequest {
+    #[schemars(
+        description = "Full id of the agent whose soul keys to list. Defaults to your own soul when omitted."
     )]
     pub agent_full_id: Option<String>,
 }
@@ -83,14 +93,42 @@ impl MundusAnimarumMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.resolve_session(&ctx.extensions).await?;
-        // Reader is always you (clears your subscription on the key you read);
-        // target is the soul you're reading — yours by default, or another
+        // An MCP read resolves the reader's notification: the reader (whose
+        // subscription this read clears) is your instance hierarchy —
+        // subscriptions/notifications are owned by it, not the agent full id.
+        // The *target* soul is yours by default (your full id), or another
         // agent's when `agent_full_id` is given.
-        let me = state.agent_full_id.as_str();
-        let target = req.agent_full_id.as_deref().unwrap_or(me);
-        let value = self.db.get_key(me, target, &req.key).await.map_err(db_err)?;
+        let reader = state.agent_instance_hierarchy.as_str();
+        let target = req
+            .agent_full_id
+            .as_deref()
+            .unwrap_or(state.agent_full_id.as_str());
+        let value = self.db.get_key(Some(reader), target, &req.key).await.map_err(db_err)?;
         let body = serde_json::to_string(&value.map_or(Value::Null, Value::String))
             .map_err(json_err)?;
+        Ok(CallToolResult::success(vec![Content::text(body)]))
+    }
+
+    #[tool(
+        name = "list",
+        description = "List every key in a soul — your own by default, or another agent's."
+    )]
+    async fn list(
+        &self,
+        Parameters(req): Parameters<ListRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let state = self.resolve_session(&ctx.extensions).await?;
+        // Like `get`, but for the whole key set: an MCP listing resolves the
+        // reader's soul notification — reader is your instance hierarchy; the
+        // target soul is yours by default, or another agent's when given.
+        let reader = state.agent_instance_hierarchy.as_str();
+        let target = req
+            .agent_full_id
+            .as_deref()
+            .unwrap_or(state.agent_full_id.as_str());
+        let keys = self.db.list_keys(Some(reader), target).await.map_err(db_err)?;
+        let body = serde_json::to_string(&keys).map_err(json_err)?;
         Ok(CallToolResult::success(vec![Content::text(body)]))
     }
 

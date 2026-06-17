@@ -17,7 +17,9 @@ impl Args {
     pub async fn run(self, ctx: &Context) -> Result<serde_json::Value, Error> {
         let agent = ctx.agent_full_id(self.agent_full_id)?;
         let db = ctx.db().await?;
-        let keys = db.list_keys(&agent, &agent).await?;
+        // A CLI listing does NOT resolve notifications (`reader = None`): only
+        // an agent's own MCP read clears its subscription.
+        let keys = db.list_keys(None, &agent).await?;
         Ok(serde_json::Value::Array(
             keys.into_iter().map(serde_json::Value::String).collect(),
         ))

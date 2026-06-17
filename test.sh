@@ -48,6 +48,18 @@ kill_servers() {
   wait "$db_pid" 2>/dev/null || true
 }
 
+# Reap leaked plugin MCP-server processes, best-effort. A mock-agent
+# completion brings up the plugin as an MCP server; on Windows that child is
+# spawned DETACHED so it outlives the test (nextest flags it "LEAK"). A
+# lingering `mundus-animarum.exe` holds its installed binary open, so the next
+# install can't replace `cli/` ("Device or resource busy") — kill it first.
+kill_plugins() {
+  case "$plat_os" in
+    windows) taskkill //IM "mundus-animarum${ext}" //F >/dev/null 2>&1 || true ;;
+    *)       pkill -x mundus-animarum >/dev/null 2>&1 || true ;;
+  esac
+}
+
 # ── 1. objectiveai host (pinned to the objectiveai-sdk dep version) ────────
 OAI_VER="$(sed -n -E 's/^objectiveai-sdk = \{ version = "([^"]+)".*/\1/p' Cargo.toml | head -1)"
 [ -n "$OAI_VER" ] || { echo "test.sh: could not read objectiveai-sdk version from Cargo.toml" >&2; exit 1; }
@@ -84,16 +96,27 @@ cargo build
 CLI_BIN="$SCRIPT_DIR/target/debug/mundus-animarum${ext}"
 [ -f "$CLI_BIN" ] || { echo "test.sh: built binary missing at $CLI_BIN" >&2; exit 1; }
 
+# A leaked plugin MCP server from a prior run would hold the installed binary
+# open (Windows: "Device or resource busy" on the replace). Reap any first,
+# then retry the removal a few times to let the OS release the file handle.
+echo "install: reaping leaked plugin processes"
+kill_plugins
 PLUGIN_DIR="$BIN_DIR/plugins/$OWNER/$NAME/$PVER"
 echo "install: $PLUGIN_DIR"
-rm -rf "$PLUGIN_DIR/cli"
+for attempt in 1 2 3 4 5; do
+  rm -rf "$PLUGIN_DIR/cli" 2>/dev/null && break
+  [ "$attempt" = 5 ] && { echo "test.sh: could not remove $PLUGIN_DIR/cli (busy)" >&2; exit 1; }
+  kill_plugins
+  sleep 1
+done
 mkdir -p "$PLUGIN_DIR/cli"
 cp "$CLI_BIN" "$PLUGIN_DIR/cli/mundus-animarum${ext}"
 cp "$SCRIPT_DIR/objectiveai.json" "$PLUGIN_DIR/objectiveai.json"
 
-# ── 3. clean slate: stop api/db, wipe state ───────────────────────────────
-echo "cleanup: stopping api/db"
+# ── 3. clean slate: stop api/db + plugins, wipe state ─────────────────────
+echo "cleanup: stopping api/db + plugins"
 kill_servers
+kill_plugins
 echo "cleanup: wiping state"
 rm -rf "$OBJECTIVEAI_DIR/state"
 
@@ -108,6 +131,7 @@ rc=0
 "$NEXTEST" nextest run "$@" || rc=$?
 
 # ── 5. final cleanup + exit ───────────────────────────────────────────────
-echo "cleanup: stopping api/db"
+echo "cleanup: stopping api/db + plugins"
 kill_servers
+kill_plugins
 exit "$rc"
