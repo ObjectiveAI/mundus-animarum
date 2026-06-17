@@ -50,7 +50,7 @@ jobs:
           - { os: windows, runner: windows-11-arm,   target: aarch64-pc-windows-msvc,    zip: mundus-animarum-windows-aarch64.zip }
           - { os: linux,   runner: ubuntu-22.04,     target: x86_64-unknown-linux-musl,  zip: mundus-animarum-linux-x86_64.zip }
           - { os: linux,   runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, zip: mundus-animarum-linux-aarch64.zip }
-          - { os: macos,   runner: macos-13,         target: x86_64-apple-darwin,        zip: mundus-animarum-macos-x86_64.zip }
+          - { os: macos,   runner: macos-15-intel,   target: x86_64-apple-darwin,        zip: mundus-animarum-macos-x86_64.zip }
           - { os: macos,   runner: macos-14,         target: aarch64-apple-darwin,       zip: mundus-animarum-macos-aarch64.zip }
     runs-on: ${{ matrix.runner }}
     steps:
