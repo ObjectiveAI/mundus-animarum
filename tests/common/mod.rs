@@ -20,6 +20,25 @@
 //!     host and surfaced on each completion chunk, so cross-channel
 //!     assertions read it back from [`SpawnResult::aih`] /
 //!     [`SpawnResult::full_id`].
+//!
+//! ## Deterministic notification flow
+//!
+//! Notifications need an external change to land *between* a subscribe and
+//! a read. The harness sequences this with no sleeps or timing hacks, using
+//! objectiveai's own primitives:
+//!   1. [`Plugin::spawn_detached`] — a **non-streaming** `agents spawn`. The
+//!      host re-execs the completion as a detached subprocess and returns
+//!      immediately with the minted AIH.
+//!   2. [`Plugin::agents_wait`] — block until that completion has fully
+//!      finalized and released the instance lock (the deterministic barrier;
+//!      see the spawn source: stream-false needs a wait, stream-true does
+//!      not).
+//!   3. a synchronous CLI `set` fires the change.
+//!   4. [`Plugin::resume`] — a **streaming** `agents spawn` by the SAME AIH.
+//!      It reuses the stored agent + presents the same instance hierarchy to
+//!      the plugin, so the subscription the first turn created is the reader
+//!      here. Streaming, so its tool results are collected inline and it
+//!      needs no trailing wait.
 #![allow(dead_code)]
 
 use std::path::PathBuf;
@@ -33,6 +52,7 @@ use objectiveai_sdk::agent::{
 use objectiveai_sdk::cli::command::agents::message::RequestMessage;
 use objectiveai_sdk::cli::command::agents::selector::{AgentRef, AgentSelector};
 use objectiveai_sdk::cli::command::agents::spawn as agents_spawn;
+use objectiveai_sdk::cli::command::agents::wait as agents_wait;
 use objectiveai_sdk::cli::command::binary::{BinaryExecutor, Error as ExecError};
 use objectiveai_sdk::cli::command::plugins::run as plugins_run;
 use objectiveai_sdk::cli::command::{AgentArguments, CommandExecutor};
@@ -94,6 +114,12 @@ pub fn done() -> mock::Call {
 /// false` means only the MCP server is brought up (not the plugin's own
 /// command tools). A trailing [`done`] turn is appended so the completion
 /// always terminates after the final tool result.
+///
+/// The mock restarts its script from `calls[0]` on every *separate*
+/// completion, so a [`Plugin::spawn_detached`] of `[subscribe, read]`
+/// followed by a [`Plugin::resume`] runs the WHOLE script twice: once
+/// before the external change (the read sees nothing) and once after (the
+/// read sees it). Assertions look only at the resumed completion.
 pub fn mcp_agent(mut calls: Vec<mock::Call>) -> InlineAgentBase {
     calls.push(done());
     let mut base = mock::AgentBase::default();
@@ -115,14 +141,6 @@ pub fn mcp_agent(mut calls: Vec<mock::Call>) -> InlineAgentBase {
         tools: Vec::new(),
     });
     InlineAgentBase::Mock(base)
-}
-
-/// What a test asks the harness to self-subscribe the spawned agent to (on
-/// the first chunk, via the CLI): a single key, or the whole key set.
-#[derive(Clone)]
-enum SelfSub {
-    Key(String),
-    Soul,
 }
 
 // ──────────────────────────────── the harness ──────────────────────────────
@@ -335,6 +353,7 @@ impl Plugin {
 
     /// Spawn an inline agent through the host (`agents spawn`, streaming,
     /// seeded) with an empty initial message, and collect the completion.
+    /// Streaming returns only after the completion has fully finalized.
     pub async fn spawn(&self, agent: InlineAgentBase) -> SpawnResult {
         self.spawn_with(agent, "", None).await
     }
@@ -347,87 +366,89 @@ impl Plugin {
         message: &str,
         args: Option<AgentArguments>,
     ) -> SpawnResult {
-        let spec = InlineAgentBaseWithFallbacksOrRemoteCommitOptional::AgentBase(
-            InlineAgentBaseWithFallbacks {
-                inner: agent,
-                fallbacks: None,
-            },
-        );
-        let agent = AgentSelector::Ref {
-            agent: AgentRef::Resolved(spec),
-        };
-        self.collect_spawn(agent, message, args, None, None).await
-    }
-
-    /// Spawn an inline agent and, the first time the streamed completion
-    /// contains `trigger`, run a plugin CLI command (`cli_args`). Used for the
-    /// notification flow: the agent subscribes (the `trigger`), a CLI `set`
-    /// fires the change, and the agent later reads it. The command is run AS
-    /// the agent (caller = its AIH) with `{FID}`/`{AIH}` substituted; its
-    /// result is stored on [`SpawnResult::triggered`].
-    pub async fn spawn_then_cli(
-        &self,
-        agent: InlineAgentBase,
-        trigger: &str,
-        cli_args: &[&str],
-    ) -> SpawnResult {
-        self.spawn_then_clis(agent, trigger, &[cli_args]).await
-    }
-
-    /// Like [`Self::spawn_then_cli`] but runs several CLI commands in sequence
-    /// on the trigger (e.g. a `set` to fire a notification, then a `get`/`list`
-    /// to test whether reading resolves it). The last command's result is
-    /// stored on [`SpawnResult::triggered`].
-    pub async fn spawn_then_clis(
-        &self,
-        agent: InlineAgentBase,
-        trigger: &str,
-        commands: &[&[&str]],
-    ) -> SpawnResult {
         let agent = Self::resolved(agent);
-        let cmds: Vec<Vec<String>> = commands
-            .iter()
-            .map(|c| c.iter().map(|s| s.to_string()).collect())
-            .collect();
-        self.collect_spawn(agent, "", None, Some((trigger.to_string(), cmds)), None)
-            .await
+        self.collect_spawn(agent, message, args).await
     }
 
-    /// Resume an existing agent instance (by its AIH) with a new message.
-    /// The stored agent definition is reused and the SAME instance
-    /// hierarchy is presented to the plugin — so a subscription a prior
-    /// turn created is readable here (the AIH is per-spawn, but resume
-    /// pins it). The mock advances past calls already satisfied in earlier
-    /// turns to the next scripted call.
+    /// Spawn an inline agent **non-streaming**: the host re-execs the
+    /// completion as a detached subprocess and returns immediately with the
+    /// minted agent instance hierarchy (the first `ResponseItem::Id`). The
+    /// completion runs on detached and still holds the instance lock — pair
+    /// with [`Self::agents_wait`] to barrier until it has fully finalized
+    /// (and released the lock) before a [`Self::resume`] re-acquires it.
+    pub async fn spawn_detached(&self, agent: InlineAgentBase) -> String {
+        let agent = Self::resolved(agent);
+        let req = agents_spawn::Request {
+            path_type: agents_spawn::Path::AgentsSpawn,
+            message: RequestMessage::Simple("go".to_string()),
+            agent,
+            dangerous_advanced: Some(agents_spawn::RequestDangerousAdvanced {
+                stream: Some(false),
+                seed: Some(42),
+                skip_lock: None,
+            }),
+            base: Default::default(),
+        };
+        let mut stream = self
+            .executor
+            .execute::<_, agents_spawn::ResponseItem>(req, None)
+            .await
+            .unwrap_or_else(|e| panic!("[{}] spawn_detached execute: {e}", self.state));
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(agents_spawn::ResponseItem::Id(hier)) => return hier,
+                Ok(_) => {}
+                Err(ExecError::Cli(e)) => {
+                    panic!("[{}] spawn_detached error: {e:?}", self.state)
+                }
+                Err(other) => panic!("[{}] spawn_detached harness error: {other}", self.state),
+            }
+        }
+        panic!("[{}] spawn_detached: no Id in response", self.state)
+    }
+
+    /// Resume an existing agent instance (by its AIH) with a new message,
+    /// streaming. The stored agent definition is reused and the SAME
+    /// instance hierarchy is presented to the plugin — so a subscription a
+    /// prior turn created is the reader here. The mock re-runs its script
+    /// from the start, so a `[subscribe, read]` script's read now sees any
+    /// change that landed since the first turn.
     pub async fn resume(&self, aih: &str, message: &str) -> SpawnResult {
         let (parent, instance) = split_owner(aih);
         let agent = AgentSelector::Instance {
             parent_agent_instance_hierarchy: Some(parent),
             agent_instance: instance,
         };
-        self.collect_spawn(agent, message, None, None, None).await
+        self.collect_spawn(agent, message, None).await
     }
 
-    /// Spawn an inline agent and, on the first chunk (once the agent's
-    /// identity is known), subscribe that agent to its OWN soul via the CLI —
-    /// before the agent runs its own `set`. Lets the agent's own (fast,
-    /// in-completion) `set` fire a notification it then reads/clears, with the
-    /// ordering fixed by the script. Breaks the no-self-subscribe constraint
-    /// without the agent needing to know its content-hash full id.
-    /// `SelfSub::Key` watches one key; `SelfSub::Soul` watches the key set.
-    pub async fn spawn_self_sub_key(&self, agent: InlineAgentBase, key: &str) -> SpawnResult {
-        self.spawn_self_sub(agent, SelfSub::Key(key.to_string())).await
-    }
-
-    /// Like [`Self::spawn_self_sub_key`] but a whole-soul (key-set) self
-    /// subscription (cleared by `list`).
-    pub async fn spawn_self_sub_soul(&self, agent: InlineAgentBase) -> SpawnResult {
-        self.spawn_self_sub(agent, SelfSub::Soul).await
-    }
-
-    async fn spawn_self_sub(&self, agent: InlineAgentBase, sub: SelfSub) -> SpawnResult {
-        let agent = Self::resolved(agent);
-        self.collect_spawn(agent, "", None, None, Some(sub)).await
+    /// Block until the agent instance `aih` has fully finalized and persisted
+    /// (`agents wait` → the lockfile's `wait_released`). The deterministic
+    /// barrier after a [`Self::spawn_detached`] — returns exactly when the
+    /// detached completion is done and the instance lock is free, with no
+    /// polling or sleeps.
+    pub async fn agents_wait(&self, aih: &str) {
+        let (parent, instance) = split_owner(aih);
+        let req = agents_wait::Request {
+            path_type: agents_wait::Path::AgentsWait,
+            agent: AgentSelector::Instance {
+                parent_agent_instance_hierarchy: Some(parent),
+                agent_instance: instance,
+            },
+            base: Default::default(),
+        };
+        let mut stream = self
+            .executor
+            .execute::<_, agents_wait::Response>(req, None)
+            .await
+            .unwrap_or_else(|e| panic!("[{}] agents wait `{aih}`: {e}", self.state));
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(_) => {}
+                Err(ExecError::Cli(e)) => panic!("[{}] agents wait error: {e:?}", self.state),
+                Err(other) => panic!("[{}] agents wait harness error: {other}", self.state),
+            }
+        }
     }
 
     /// Wrap an inline agent as a resolved `AgentSelector::Ref`.
@@ -443,23 +464,16 @@ impl Plugin {
         }
     }
 
-    /// Core: stream a seeded `agents spawn` for `selector` and collect the
-    /// completion into a [`SpawnResult`].
-    ///
-    /// Two optional mid-stream actions (fired once, last result stored on
-    /// [`SpawnResult::triggered`]):
-    /// - `cli_trigger = (needle, commands)`: the first time a streamed item
-    ///   contains `needle`, run each plugin CLI command in sequence.
-    /// - `self_sub = Some(SelfSub::…)`: subscribe the agent to its own soul
-    ///   (`subscriber = AIH`, `target = full id`) once both are known (the
-    ///   first chunk) — a single key or the whole key set.
+    /// Core: stream a seeded `agents spawn` for `selector` (a `Ref` for a
+    /// fresh agent, an `Instance` for a resume) and collect the completion
+    /// into a [`SpawnResult`]. Streaming (`stream = true`), so it returns
+    /// only once the completion has fully finalized and persisted — no
+    /// `agents wait` is needed after it.
     async fn collect_spawn(
         &self,
         selector: AgentSelector,
         message: &str,
         args: Option<AgentArguments>,
-        mut cli_trigger: Option<(String, Vec<Vec<String>>)>,
-        mut self_sub: Option<SelfSub>,
     ) -> SpawnResult {
         let req = agents_spawn::Request {
             path_type: agents_spawn::Path::AgentsSpawn,
@@ -489,9 +503,8 @@ impl Plugin {
                 Err(other) => panic!("[{}] spawn harness error: {other}", self.state),
             };
 
-            let serialized = serde_json::to_value(&item).map(|v| v.to_string()).unwrap_or_default();
-
-            // Capture identity from chunks.
+            // Capture identity from chunks (the first `ResponseItem` is an
+            // `Id`; chunks carry the same hierarchy plus the full id).
             if let agents_spawn::ResponseItem::Chunk(chunk) = &item {
                 if result.agent_instance_hierarchy.is_none()
                     && !chunk.agent_instance_hierarchy.is_empty()
@@ -506,73 +519,10 @@ impl Plugin {
                 }
             }
 
-            // Self-subscribe: once the agent's identity is known, subscribe it
-            // to its own soul via the CLI (before the agent's own set).
-            if let Some(sub) = &self_sub {
-                if let (Some(aih), Some(fid)) =
-                    (&result.agent_instance_hierarchy, &result.agent_full_id)
-                {
-                    let (aih, fid) = (aih.clone(), fid.clone());
-                    let sub = sub.clone();
-                    self_sub = None;
-                    result.triggered = Some(match sub {
-                        SelfSub::Key(key) => self.cli_subscribe_key(&aih, &fid, &key).await,
-                        SelfSub::Soul => self.cli_subscribe_soul(&aih, &fid).await,
-                    });
-                }
-            }
-
-            // CLI trigger: on the first matching item, run each plugin CLI
-            // command in sequence. `{FID}`/`{AIH}` in the args are substituted
-            // with the captured identity, and each command runs AS the agent
-            // (caller = its instance hierarchy) so identity-sensitive behavior
-            // (e.g. which subscription a read would resolve) matches the agent.
-            if let Some((needle, commands)) = &cli_trigger {
-                if serialized.contains(needle.as_str()) {
-                    let aih = result.agent_instance_hierarchy.clone();
-                    let fid = result.agent_full_id.clone();
-                    let commands = commands.clone();
-                    cli_trigger = None;
-                    for command in &commands {
-                        let args: Vec<String> = command
-                            .iter()
-                            .map(|a| {
-                                let mut a = a.clone();
-                                if let Some(fid) = &fid {
-                                    a = a.replace("{FID}", fid);
-                                }
-                                if let Some(aih) = &aih {
-                                    a = a.replace("{AIH}", aih);
-                                }
-                                a
-                            })
-                            .collect();
-                        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-                        result.triggered = Some(match &aih {
-                            Some(aih) => self.cli_as(aih, &argv).await,
-                            None => self.cli(&argv).await,
-                        });
-                    }
-                }
-            }
-
             result.items.push(item);
         }
         result
     }
-}
-
-/// `n` warmup `get` calls (distinct keys so the mock treats them as distinct
-/// turns; no `agent_full_id` ⇒ reads the agent's own empty soul, clearing
-/// nothing). Inserted between a subscribe and a notifications read: while
-/// [`Plugin::spawn_then_cli`] pauses the read to run the CLI change, the
-/// warmup chunks overflow the stdout pipe and the agent blocks on
-/// backpressure — so it can't reach `notifications` until the change lands.
-/// Kept compact so the inline-agent JSON stays under the OS argv limit.
-pub fn warmups(n: usize) -> Vec<mock::Call> {
-    (0..n)
-        .map(|i| call(tool("get", serde_json::json!({ "key": i.to_string() }))))
-        .collect()
 }
 
 /// Split an AIH `<parent>/<instance>` on its LAST `/` into the parent
@@ -633,10 +583,11 @@ impl RunResult {
     }
 }
 
-/// The collected output of one mock-agent completion (`agents spawn`).
+/// The collected output of one mock-agent completion (`agents spawn` /
+/// resume).
 #[derive(Default)]
 pub struct SpawnResult {
-    /// The raw streamed response items (chunks + any id).
+    /// The raw streamed response items (the leading id + chunks).
     pub items: Vec<agents_spawn::ResponseItem>,
     /// Host/executor error frames.
     pub errors: Vec<objectiveai_sdk::cli::Error>,
@@ -649,9 +600,6 @@ pub struct SpawnResult {
     /// The agent full id — the soul owner the plugin's MCP sees in the
     /// `X-OBJECTIVEAI-AGENT-FULL-ID` header. Stable for an agent definition.
     pub agent_full_id: Option<String>,
-    /// The result of the CLI command fired mid-stream by
-    /// [`Plugin::spawn_then_cli`], if any.
-    pub triggered: Option<RunResult>,
 }
 
 impl SpawnResult {
@@ -718,8 +666,7 @@ impl SpawnResult {
     }
 
     /// Every tool result parsed as JSON, in stream order (results that don't
-    /// parse are skipped). For a script with no warmups this is exactly the
-    /// per-call results in call order.
+    /// parse are skipped) — exactly the per-call results in call order.
     pub fn tool_jsons(&self) -> Vec<Value> {
         self.tool_results()
             .iter()
@@ -737,20 +684,6 @@ impl SpawnResult {
                 v.get("notifications").is_some().then_some(v)
             })
             .collect()
-    }
-
-    /// The first tool result that parses as JSON and contains `key` at the
-    /// top level — e.g. the `notifications` result (`{"notifications":…}`).
-    pub fn tool_result_with(&self, key: &str) -> Value {
-        self.tool_results()
-            .into_iter()
-            .find_map(|t| {
-                let v: Value = serde_json::from_str(&t).ok()?;
-                v.get(key).is_some().then_some(v)
-            })
-            .unwrap_or_else(|| {
-                panic!("no tool result with `{key}` among {:?}", self.tool_results())
-            })
     }
 
     /// The minted agent instance hierarchy (panics if no chunk carried one).

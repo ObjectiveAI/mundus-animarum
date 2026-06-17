@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{Plugin, call, mcp_agent, tool, warmups};
+use common::{Plugin, call, mcp_agent, tool};
 use serde_json::json;
 
 /// `set` writes the agent's own soul and echoes the value; `get` reads it
@@ -150,178 +150,148 @@ async fn mcp_unsubscribe() {
     p.cli_subscriptions(s.aih()).await.assert_result(json!([]));
 }
 
-/// Collect every notification object drained across all `notifications`
-/// reads, in stream order. Robust to read/CLI-set timing: regardless of which
-/// spread read first runs after the change, the union is the same.
-fn drained(reads: &[serde_json::Value]) -> Vec<serde_json::Value> {
-    reads
-        .iter()
-        .flat_map(|r| r["notifications"].as_array().cloned().unwrap_or_default())
-        .collect()
-}
-
 /// `notifications` returns the agent's pending soul-change notifications and
-/// resolves them. The agent subscribes to a victim soul; a CLI `set` (fired
-/// when the subscribe is seen) changes it; the agent reads notifications
-/// repeatedly across the completion, and exactly one read drains the soul
-/// change (the rest are empty — resolved). Spreading the reads makes the test
-/// robust to when the (process-spawn) `set` lands relative to the agent.
+/// resolves them. The deterministic flow: a detached first turn subscribes to
+/// a victim soul (script `[subscribe_soul, notifications]`); `agents wait`
+/// barriers until it's committed; a CLI `set` changes the victim soul; the
+/// resumed turn re-runs the script and its `notifications` read drains the
+/// soul change. Every step is sequenced — no timing hacks.
 #[tokio::test]
 async fn mcp_notifications_basic() {
     let p = Plugin::new("mcp_notifications_basic");
     let victim = "victim-agent";
 
-    let mut calls = vec![call(tool("subscribe_soul", json!({ "agent_full_id": victim })))];
-    for _ in 0..6 {
-        calls.extend(warmups(40));
-        calls.push(call(tool("notifications", json!({}))));
-    }
-    let agent = mcp_agent(calls);
+    let agent = mcp_agent(vec![
+        call(tool("subscribe_soul", json!({ "agent_full_id": victim }))),
+        call(tool("notifications", json!({}))),
+    ]);
 
-    let s = p
-        .spawn_then_cli(
-            agent,
-            "mundus-animarum_subscribe_soul",
-            &["set", "--agent-full-id", victim, "--key", "k", "--value", "v"],
-        )
-        .await;
+    // Turn 1 (detached): subscribe commits; the notifications read sees
+    // nothing (no change yet). Barrier until the instance lock is released.
+    let aih = p.spawn_detached(agent).await;
+    p.agents_wait(&aih).await;
+
+    // Fire the soul change — the AIH is now a subscriber of the victim.
+    p.cli_set(victim, "k", "v").await.assert_no_errors();
+
+    // Turn 2 (resume, same AIH): re-subscribe (idempotent), then the
+    // notifications read drains the soul change.
+    let s = p.resume(&aih, "go").await;
     s.assert_no_errors();
-    assert!(s.triggered.as_ref().is_some_and(|t| t.errors.is_empty()));
-
-    let reads = s.notification_reads();
-    // The soul change is drained exactly once across the reads.
     assert_eq!(
-        drained(&reads),
-        vec![json!({ "target": victim, "soul": true })],
-        "expected exactly the soul change drained once; reads = {reads:?}",
+        s.notification_reads(),
+        vec![json!({ "notifications": [{ "target": victim, "soul": true }], "remaining": 0 })],
     );
-    // Nothing left pending at the end.
-    assert_eq!(reads.last().expect("a read")["remaining"], json!(0));
 }
 
 /// `notifications` honors `count` (never more than `count` per read) and
 /// reports `remaining`. One CLI `set` of a new key fires BOTH the agent's key
-/// subscription and its soul subscription on the victim; the spread `count:1`
-/// reads drain them one at a time — key first (key subs are ordered before
-/// soul) with one remaining, then the soul with none remaining.
+/// subscription and its soul subscription on the victim; the resumed turn's
+/// two `count:1` reads drain them one at a time — key first (key subs are
+/// ordered before soul) with one remaining, then the soul with none.
 #[tokio::test]
 async fn mcp_notifications_count_and_remaining() {
     let p = Plugin::new("mcp_notifications_count");
     let victim = "victim-agent";
 
-    let mut calls = vec![
+    let agent = mcp_agent(vec![
         call(tool("subscribe_key", json!({ "agent_full_id": victim, "key": "k1" }))),
         call(tool("subscribe_soul", json!({ "agent_full_id": victim }))),
-        // gate: fire the set once both subscribes have committed.
-        call(tool("get", json!({ "key": "GATEKEY" }))),
-    ];
-    for _ in 0..6 {
-        calls.extend(warmups(40));
-        calls.push(call(tool("notifications", json!({ "count": 1 }))));
-    }
-    let agent = mcp_agent(calls);
+        call(tool("notifications", json!({ "count": 1 }))),
+        call(tool("notifications", json!({ "count": 1 }))),
+    ]);
 
-    // setting the new key k1 fires the (victim,k1) key sub AND the victim soul sub.
-    let s = p
-        .spawn_then_cli(
-            agent,
-            "GATEKEY",
-            &["set", "--agent-full-id", victim, "--key", "k1", "--value", "v"],
-        )
-        .await;
+    let aih = p.spawn_detached(agent).await;
+    p.agents_wait(&aih).await;
+
+    // Setting the new key k1 fires the (victim,k1) key sub AND the victim soul sub.
+    p.cli_set(victim, "k1", "v").await.assert_no_errors();
+
+    let s = p.resume(&aih, "go").await;
     s.assert_no_errors();
 
-    let reads = s.notification_reads();
-    // count:1 cap — no read ever returns more than one notification.
-    for r in &reads {
-        assert!(
-            r["notifications"].as_array().expect("array").len() <= 1,
-            "count:1 exceeded in {r:?}",
-        );
-    }
-    // Both fired notifications drained, key before soul.
+    // count:1 → key first with one remaining, then the soul with none.
     assert_eq!(
-        drained(&reads),
+        s.notification_reads(),
         vec![
-            json!({ "target": victim, "key": "k1" }),
-            json!({ "target": victim, "soul": true }),
+            json!({ "notifications": [{ "target": victim, "key": "k1" }], "remaining": 1 }),
+            json!({ "notifications": [{ "target": victim, "soul": true }], "remaining": 0 }),
         ],
-        "expected key then soul drained; reads = {reads:?}",
     );
-    // The read that drained the key reported one still pending (the soul);
-    // the read that drained the soul reported none.
-    let key_read = reads
-        .iter()
-        .find(|r| r["notifications"][0].get("key").is_some())
-        .expect("a read that drained the key");
-    assert_eq!(key_read["remaining"], json!(1));
-    let soul_read = reads
-        .iter()
-        .find(|r| r["notifications"][0].get("soul").is_some())
-        .expect("a read that drained the soul");
-    assert_eq!(soul_read["remaining"], json!(0));
 }
 
-/// Reading the watched data resolves the notification: the agent is
-/// self-subscribed to its own soul key (subscription created via the CLI on
-/// the first chunk, before the agent acts), sets that key (firing the
-/// notification), reads it with `get` (which clears the pending
-/// notification), then `notifications` is empty. set→get→notifications run in
-/// one completion, so their ordering — and these assertions — are
-/// deterministic.
+/// Reading the watched data resolves the notification. The agent watches the
+/// victim's key `k` (script `[subscribe_key, get, notifications]`); after a
+/// CLI `set` of that key fires the notification, the resumed turn's `get` of
+/// the watched key reads "v" AND clears the pending notification, so the
+/// following `notifications` read is empty. The get→notifications ordering is
+/// fixed by the script, so the assertion is deterministic.
 #[tokio::test]
 async fn mcp_notifications_cleared_by_read() {
     let p = Plugin::new("mcp_notifications_cleared");
+    let victim = "victim-agent";
 
-    // Warm up first so the CLI self-subscribe lands before the agent's set.
-    let mut calls = warmups(250);
-    calls.push(call(tool("set", json!({ "key": "k", "value": "v" })))); // fires the self key-sub
-    calls.push(call(tool("get", json!({ "key": "k" })))); // reads "v" AND clears
-    calls.push(call(tool("notifications", json!({})))); // empty (cleared)
-    let agent = mcp_agent(calls);
+    let agent = mcp_agent(vec![
+        call(tool("subscribe_key", json!({ "agent_full_id": victim, "key": "k" }))),
+        call(tool("get", json!({ "key": "k", "agent_full_id": victim }))),
+        call(tool("notifications", json!({}))),
+    ]);
 
-    let s = p.spawn_self_sub_key(agent, "k").await;
+    let aih = p.spawn_detached(agent).await;
+    p.agents_wait(&aih).await;
+
+    p.cli_set(victim, "k", "v").await.assert_no_errors();
+
+    let s = p.resume(&aih, "go").await;
     s.assert_no_errors();
-    // the self-subscribe succeeded.
-    assert!(s.triggered.as_ref().is_some_and(|t| t.errors.is_empty()));
 
-    // the agent set its own soul and read the value back (deterministic).
+    // The get read the watched key (resolving the notification) …
     assert!(
         s.tool_jsons().contains(&json!("v")),
-        "expected the agent's own set+get to round-trip 'v'",
+        "expected the get of the watched key to return 'v'; got {:?}",
+        s.tool_jsons(),
     );
-    // reading the watched key cleared the notification, so it is empty.
-    let reads = s.notification_reads();
-    assert_eq!(reads, vec![json!({ "notifications": [], "remaining": 0 })]);
+    // … so the notifications read is empty.
+    assert_eq!(
+        s.notification_reads(),
+        vec![json!({ "notifications": [], "remaining": 0 })],
+    );
 }
 
 /// The soul-scope counterpart of [`mcp_notifications_cleared_by_read`]:
-/// listing the key set resolves a soul notification. The agent is
-/// self-subscribed to its own SOUL, sets a new key (growing the key set,
-/// which fires the soul notification), lists the keys (clearing it), then
-/// `notifications` is empty. Deterministic: set→list→notifications run
-/// sequentially in one completion.
+/// listing the key set resolves a soul notification. The agent watches the
+/// victim's SOUL (script `[subscribe_soul, list, notifications]`); after a CLI
+/// `set` of a new key fires the soul notification, the resumed turn's `list`
+/// of the watched soul reads [k] AND clears it, so the following
+/// `notifications` read is empty.
 #[tokio::test]
 async fn mcp_notifications_cleared_by_list() {
     let p = Plugin::new("mcp_notifications_cleared_list");
+    let victim = "victim-agent";
 
-    // Warm up first so the CLI self soul-subscribe lands before the set.
-    let mut calls = warmups(250);
-    calls.push(call(tool("set", json!({ "key": "k", "value": "v" })))); // new key → fires soul sub
-    calls.push(call(tool("list", json!({})))); // lists [k] AND clears the soul notification
-    calls.push(call(tool("notifications", json!({})))); // empty (cleared)
-    let agent = mcp_agent(calls);
+    let agent = mcp_agent(vec![
+        call(tool("subscribe_soul", json!({ "agent_full_id": victim }))),
+        call(tool("list", json!({ "agent_full_id": victim }))),
+        call(tool("notifications", json!({}))),
+    ]);
 
-    let s = p.spawn_self_sub_soul(agent).await;
+    let aih = p.spawn_detached(agent).await;
+    p.agents_wait(&aih).await;
+
+    p.cli_set(victim, "k", "v").await.assert_no_errors();
+
+    let s = p.resume(&aih, "go").await;
     s.assert_no_errors();
-    assert!(s.triggered.as_ref().is_some_and(|t| t.errors.is_empty()));
 
-    // the agent listed its own soul and saw the key it set.
+    // The list read the watched soul (resolving the notification) and saw k …
     assert!(
         s.tool_jsons().contains(&json!(["k"])),
-        "expected the agent's own list to return [k]",
+        "expected the list of the watched soul to return [k]; got {:?}",
+        s.tool_jsons(),
     );
-    // listing the key set cleared the soul notification, so it is empty.
-    let reads = s.notification_reads();
-    assert_eq!(reads, vec![json!({ "notifications": [], "remaining": 0 })]);
+    // … so the notifications read is empty.
+    assert_eq!(
+        s.notification_reads(),
+        vec![json!({ "notifications": [], "remaining": 0 })],
+    );
 }
