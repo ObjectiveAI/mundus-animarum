@@ -88,7 +88,7 @@ impl ServerHandler for MundusAnimarumMcp {
             server_info: Implementation {
                 name: "mundus-animarum".into(),
                 title: None,
-                version: "0.1.0".into(),
+                version: "0.1.1".into(),
                 description: None,
                 icons: None,
                 website_url: None,

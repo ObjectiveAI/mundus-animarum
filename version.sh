@@ -4,11 +4,13 @@
 #
 #   ./version.sh <new-version>     e.g.  ./version.sh 0.2.0
 #
-# Updates the four places the version lives:
-#   - Cargo.toml      [package] version
-#   - Cargo.lock      the mundus-animarum package entry
-#   - src/mcp/mod.rs  the MCP server's initialize-response version
-#   - objectiveai.json the plugin manifest version
+# Updates the five places the version lives:
+#   - Cargo.toml          [package] version
+#   - Cargo.lock          the mundus-animarum package entry
+#   - src/mcp/mod.rs      the MCP server's initialize-response version
+#   - objectiveai.json    the plugin manifest version
+#   - tests/common/mod.rs the test harness's installed-plugin coordinate
+#                         (the version dir test.sh installs the plugin under)
 #
 # Pure sed, no compile. Does NOT commit — committing the bump is what triggers
 # the release workflow (which fires on Cargo.toml changes to main). Requires
@@ -39,4 +41,9 @@ sed -i -E 's/version: "[^"]*"\.into\(\)/version: "'"$new"'".into()/' src/mcp/mod
 # Plugin manifest.
 sed -i -E 's/"version": "[^"]*"/"version": "'"$new"'"/' objectiveai.json
 
-echo "Bumped to $new in: Cargo.toml, Cargo.lock, src/mcp/mod.rs, objectiveai.json"
+# Test harness — the `VERSION` const is the installed-plugin coordinate the
+# integration tests request (escape `&` in the `&str` replacement so sed
+# doesn't treat it as the whole-match reference).
+sed -i -E 's/const VERSION: &str = "[^"]*"/const VERSION: \&str = "'"$new"'"/' tests/common/mod.rs
+
+echo "Bumped to $new in: Cargo.toml, Cargo.lock, src/mcp/mod.rs, objectiveai.json, tests/common/mod.rs"

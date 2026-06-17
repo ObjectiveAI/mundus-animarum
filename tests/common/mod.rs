@@ -62,7 +62,7 @@ use serde_json::Value;
 /// `test.sh` (matches the repo-root `objectiveai.json`).
 const OWNER: &str = "ObjectiveAI";
 const NAME: &str = "mundus-animarum";
-const VERSION: &str = "0.1.0";
+const VERSION: &str = "0.1.1";
 
 /// The plugin manifest's declared MCP-server name (what the agent's
 /// `client_objectiveai_mcp` brings up).
