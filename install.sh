@@ -4,8 +4,10 @@
 #
 # Re-uses what's already in the plugin's version dir ONLY if both artifacts are
 # present — the cli_zip (in cli/) and objectiveai.json (at the head). If EITHER
-# is missing, both are downloaded from the GitHub release. Then cli/ is stripped
-# of everything but its zip and the zip is unpacked in place.
+# is missing, the cli_zip is fetched from the GitHub release and the manifest
+# from the tagged commit (raw.githubusercontent at v<version>) — the manifest is
+# committed source, not a release asset. Then cli/ is stripped of everything but
+# its zip and the zip is unpacked in place.
 #
 # Our integration flow builds first (build.sh writes both), so it re-uses and
 # never downloads.
@@ -44,7 +46,8 @@ VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$R
 PLUGIN_DIR="$DIR/bin/plugins/ObjectiveAI/mundus-animarum/$VERSION"
 CLI_DIR="$PLUGIN_DIR/cli"
 CLI_ZIP_NAME="mundus-animarum-$PLATFORM-$ARCH.zip"
-RELEASE_URL="https://github.com/$REPO/releases/download/v$VERSION"
+RELEASE_URL="https://github.com/$REPO/releases/download/v$VERSION"   # build artifacts
+RAW_URL="https://raw.githubusercontent.com/$REPO/v$VERSION"          # committed source @ tag
 
 download() {  # download <url> <dest>
   echo "==> fetching $(basename "$2")"
@@ -64,8 +67,8 @@ if [ -f "$CLI_DIR/$CLI_ZIP_NAME" ] && [ -f "$PLUGIN_DIR/objectiveai.json" ]; the
 else
   echo "==> fetching v$VERSION artifacts into $PLUGIN_DIR"
   mkdir -p "$CLI_DIR"
-  download "$RELEASE_URL/$CLI_ZIP_NAME"    "$CLI_DIR/$CLI_ZIP_NAME"
-  download "$RELEASE_URL/objectiveai.json" "$PLUGIN_DIR/objectiveai.json"
+  download "$RELEASE_URL/$CLI_ZIP_NAME" "$CLI_DIR/$CLI_ZIP_NAME"
+  download "$RAW_URL/objectiveai.json"  "$PLUGIN_DIR/objectiveai.json"
 fi
 
 # cli/: delete everything but the zip, then unpack the zip in place.
