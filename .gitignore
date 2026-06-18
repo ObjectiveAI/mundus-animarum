@@ -3,7 +3,3 @@
 *.pdb
 # Integration-test scratch (populated by test.sh)
 /.objectiveai/
-/bin/
-# cargo-install registry written alongside ./bin by `cargo install --root .`
-/.crates.toml
-/.crates2.json

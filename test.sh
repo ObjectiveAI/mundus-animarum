@@ -1,137 +1,92 @@
 #!/usr/bin/env bash
+# test.sh — reset the local .objectiveai integration sandbox (keeping the
+# expensive-to-rebuild bits), reinstall the host + the already-built plugin,
+# then run the test suite.
 #
-# test.sh — full integration-test cycle for mundus-animarum.
+# Assumes build.sh has ALREADY staged the plugin (cli_zip + manifest) into the
+# tree — test.sh does NOT build. It DOES install the plugin (via install.sh, in
+# reuse mode), so you can re-test without rebuilding.
 #
-#   1. Fetch the objectiveai host (cli/api/db) for this platform into
-#      .objectiveai/bin — pinned to the objectiveai-sdk version in Cargo.toml,
-#      skipped when .objectiveai/bin/version.txt is already current.
-#   2. Build mundus-animarum (debug) and install it as a plugin under
-#      .objectiveai/bin/plugins — always, the way `plugins install` does
-#      (replace cli/, copy the binary, copy the manifest).
-#   3. Stop any running api/db and wipe the state dir for a clean slate.
-#   4. Ensure cargo-nextest is in ./bin, run the tests, stop api/db again.
-#   5. Exit with nextest's status.
+#   1. If the host binary is present, `kill-all` to stop any servers it left
+#      running (they'd otherwise hold files open).
+#   2. Wipe .objectiveai/bin/ down to the keepers — the `plugins` (the built
+#      plugin) and `pg-bin` dirs, plus any .zip sitting DIRECTLY in bin/.
+#   3. Delete the state folder (.objectiveai/state) entirely.
+#   4. (Re)install the objectiveai host via the upstream curl installer,
+#      pointed at our .objectiveai (--objectiveai-dir), no PATH changes.
+#   5. Install the built plugin via install.sh (the zip is already present, so
+#      it just cleans + unpacks in place — no download).
+#   6. Apply the global API config the run needs (mcp timeout, backoff).
+#   7. Run the suite (cargo nextest), then `kill-all`, exit on the nextest rc.
 #
-# Extra args are forwarded to nextest (e.g. `bash test.sh harness_smoke`).
+# Requires `cargo-nextest` on PATH. Extra args forward to nextest
+# (e.g. `bash test.sh mcp_notifications_basic`).
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
-export OBJECTIVEAI_DIR="$SCRIPT_DIR/.objectiveai"
-BIN_DIR="$OBJECTIVEAI_DIR/bin"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$REPO_ROOT"
+OAI_DIR="$REPO_ROOT/.objectiveai"
+BIN_DIR="$OAI_DIR/bin"
 
-# ── platform → asset suffix ───────────────────────────────────────────────
 case "$(uname -s)" in
-  Linux)                plat_os="linux" ;;
-  Darwin)               plat_os="macos" ;;
-  MINGW*|MSYS*|CYGWIN*) plat_os="windows" ;;
-  *) echo "test.sh: unsupported OS '$(uname -s)'" >&2; exit 1 ;;
+  Linux*)               PLATFORM="linux"   ;;
+  Darwin*)              PLATFORM="macos"   ;;
+  CYGWIN*|MINGW*|MSYS*) PLATFORM="windows" ;;
+  *) echo "unsupported OS: $(uname -s)" >&2; exit 1 ;;
 esac
-case "$(uname -m)" in
-  x86_64|amd64)  plat_arch="x86_64" ;;
-  arm64|aarch64) plat_arch="aarch64" ;;
-  *) echo "test.sh: unsupported arch '$(uname -m)'" >&2; exit 1 ;;
-esac
-ext=""; [ "$plat_os" = "windows" ] && ext=".exe"
-platarch="${plat_os}-${plat_arch}"
+if [ "$PLATFORM" = "windows" ]; then EXE=".exe"; else EXE=""; fi
 
-OAI_BIN="$BIN_DIR/objectiveai${ext}"
+HOST="$BIN_DIR/objectiveai$EXE"
 
-# Stop any running api + db servers, in parallel, best-effort.
-kill_servers() {
-  [ -x "$OAI_BIN" ] || return 0
-  "$OAI_BIN" api kill --global >/dev/null 2>&1 &
-  local api_pid=$!
-  "$OAI_BIN" db kill --global >/dev/null 2>&1 &
-  local db_pid=$!
-  wait "$api_pid" 2>/dev/null || true
-  wait "$db_pid" 2>/dev/null || true
-}
+# 1. Stop any running host servers.
+if [ -x "$HOST" ]; then
+  echo "==> objectiveai kill-all"
+  "$HOST" kill-all || true
+fi
 
-# Reap leaked plugin MCP-server processes, best-effort. A mock-agent
-# completion brings up the plugin as an MCP server; on Windows that child is
-# spawned DETACHED so it outlives the test (nextest flags it "LEAK"). A
-# lingering `mundus-animarum.exe` holds its installed binary open, so the next
-# install can't replace `cli/` ("Device or resource busy") — kill it first.
-kill_plugins() {
-  case "$plat_os" in
-    windows) taskkill //IM "mundus-animarum${ext}" //F >/dev/null 2>&1 || true ;;
-    *)       pkill -x mundus-animarum >/dev/null 2>&1 || true ;;
-  esac
-}
-
-# ── 1. objectiveai host (pinned to the objectiveai-sdk dep version) ────────
-OAI_VER="$(sed -n -E 's/^objectiveai-sdk = \{ version = "([^"]+)".*/\1/p' Cargo.toml | head -1)"
-[ -n "$OAI_VER" ] || { echo "test.sh: could not read objectiveai-sdk version from Cargo.toml" >&2; exit 1; }
-VERSION_FILE="$BIN_DIR/version.txt"
-if [ -f "$VERSION_FILE" ] && [ "$(cat "$VERSION_FILE")" = "$OAI_VER" ]; then
-  echo "objectiveai v$OAI_VER already present in $BIN_DIR"
-else
-  echo "objectiveai: downloading v$OAI_VER ($platarch)"
-  mkdir -p "$BIN_DIR"
-  base_url="https://github.com/ObjectiveAI/objectiveai/releases/download/v$OAI_VER"
-  for entry in \
-    "objectiveai|objectiveai-${platarch}${ext}" \
-    "objectiveai-api|objectiveai-${platarch}-api${ext}" \
-    "objectiveai-db|objectiveai-${platarch}-db${ext}"; do
-    dest="${entry%%|*}"; asset="${entry#*|}"
-    out="$BIN_DIR/${dest}${ext}"
-    echo "  $asset"
-    curl -fSL --retry 3 -o "$out" "$base_url/$asset" \
-      || { echo "test.sh: failed to download $base_url/$asset" >&2; exit 1; }
-    [ "$plat_os" = "windows" ] || chmod +x "$out"
+# 2. Clean bin/ down to the keepers: `plugins` (the built plugin from build.sh)
+#    and `pg-bin` (the postgres binaries), plus any host zip cached directly in
+#    bin/. Everything else — host binaries, other dirs — goes.
+if [ -d "$BIN_DIR" ]; then
+  shopt -s nullglob
+  for entry in "$BIN_DIR"/*; do
+    name="$(basename "$entry")"
+    case "$name" in
+      plugins|pg-bin) continue ;;
+    esac
+    # Keep a .zip sitting directly in bin/; zips nested in removed dirs go.
+    if [ -f "$entry" ] && [ "$name" != "${name%.zip}" ]; then
+      continue
+    fi
+    rm -rf "$entry"
   done
-  echo "$OAI_VER" > "$VERSION_FILE"
+  shopt -u nullglob
 fi
 
-# ── 2. build + install mundus-animarum (debug, unconditional) ─────────────
-OWNER="$(sed -n -E 's/.*"owner"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' objectiveai.json | head -1)"
-NAME="$(sed -n -E 's/.*"name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' objectiveai.json | head -1)"
-PVER="$(sed -n -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' objectiveai.json | head -1)"
-[ -n "$OWNER" ] && [ -n "$NAME" ] && [ -n "$PVER" ] \
-  || { echo "test.sh: could not read owner/name/version from objectiveai.json" >&2; exit 1; }
+# 3. Delete the state folder entirely.
+rm -rf "$OAI_DIR/state"
 
-echo "build: mundus-animarum (debug)"
-cargo build
-CLI_BIN="$SCRIPT_DIR/target/debug/mundus-animarum${ext}"
-[ -f "$CLI_BIN" ] || { echo "test.sh: built binary missing at $CLI_BIN" >&2; exit 1; }
+# 4. (Re)install the objectiveai host into our .objectiveai dir, no PATH change.
+echo "==> installing objectiveai host into $OAI_DIR"
+curl -fsSL https://raw.githubusercontent.com/ObjectiveAI/objectiveai/main/install.sh \
+  | bash -s -- --no-export-path --objectiveai-dir "$OAI_DIR"
 
-# A leaked plugin MCP server from a prior run would hold the installed binary
-# open (Windows: "Device or resource busy" on the replace). Reap any first,
-# then retry the removal a few times to let the OS release the file handle.
-echo "install: reaping leaked plugin processes"
-kill_plugins
-PLUGIN_DIR="$BIN_DIR/plugins/$OWNER/$NAME/$PVER"
-echo "install: $PLUGIN_DIR"
-for attempt in 1 2 3 4 5; do
-  rm -rf "$PLUGIN_DIR/cli" 2>/dev/null && break
-  [ "$attempt" = 5 ] && { echo "test.sh: could not remove $PLUGIN_DIR/cli (busy)" >&2; exit 1; }
-  kill_plugins
-  sleep 1
-done
-mkdir -p "$PLUGIN_DIR/cli"
-cp "$CLI_BIN" "$PLUGIN_DIR/cli/mundus-animarum${ext}"
-cp "$SCRIPT_DIR/objectiveai.json" "$PLUGIN_DIR/objectiveai.json"
+# 5. Install the already-built plugin (build.sh produced the zip → unpack only).
+echo "==> installing the built plugin into $OAI_DIR"
+bash "$REPO_ROOT/install.sh" --dir "$OAI_DIR"
 
-# ── 3. clean slate: stop api/db + plugins, wipe state ─────────────────────
-echo "cleanup: stopping api/db + plugins"
-kill_servers
-kill_plugins
-echo "cleanup: wiping state"
-rm -rf "$OBJECTIVEAI_DIR/state"
+# 6. Global API config for the run. mcp-timeout-ms keeps the MCP-heavy resume
+#    tests from timing out; backoff is best-effort (older hosts lack the key).
+echo "==> objectiveai api config (global)"
+"$HOST" api config mcp-timeout-ms set 300000 --global
+"$HOST" api config backoff-max-elapsed-time-ms set 0 --global || true
 
-# ── 4. nextest ────────────────────────────────────────────────────────────
-NEXTEST="$SCRIPT_DIR/bin/cargo-nextest${ext}"
-if [ ! -x "$NEXTEST" ]; then
-  echo "nextest: installing into ./bin"
-  cargo install cargo-nextest --locked --root "$SCRIPT_DIR"
-fi
-echo "nextest: running"
+# 7. Run the suite, then stop the host's servers and exit on the nextest result.
+echo "==> cargo nextest run"
 rc=0
-"$NEXTEST" nextest run "$@" || rc=$?
+cargo nextest run "$@" || rc=$?
 
-# ── 5. final cleanup + exit ───────────────────────────────────────────────
-echo "cleanup: stopping api/db + plugins"
-kill_servers
-kill_plugins
+echo "==> objectiveai kill-all"
+"$HOST" kill-all || true
+
 exit "$rc"
