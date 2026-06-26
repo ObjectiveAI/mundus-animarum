@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Build + stage cli_zip
-        run: bash build.sh --release
+        run: bash build.sh --release --no-test
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}

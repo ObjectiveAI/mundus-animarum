@@ -15,17 +15,26 @@
 # (or the host) can unpack the cli_zip in place. Coords + version come from
 # objectiveai.json (kept in sync by version.sh).
 #
+# Also installs the objectiveai host binaries into .objectiveai/bin (for the
+# integration tests), via the upstream installer pinned to our objectiveai-sdk
+# version tag — it caches the versioned release zip under .objectiveai/bin and
+# reuses it on re-runs, then unpacks the staged cli_zip in place. Skip that with
+# --no-test (e.g. the release build, which only needs to package the plugin).
+#
 # Usage:
-#   bash build.sh            # debug
-#   bash build.sh --release  # release
+#   bash build.sh                       # debug,   + objectiveai host
+#   bash build.sh --release             # release, + objectiveai host
+#   bash build.sh --release --no-test   # release, plugin only (no host)
 set -euo pipefail
 
 REL=""
 PROFILE="debug"
+NO_TEST=0
 for arg in "$@"; do
   case "$arg" in
     --release) REL="--release"; PROFILE="release" ;;
-    *) echo "build.sh: unknown arg: $arg (usage: build.sh [--release])" >&2; exit 1 ;;
+    --no-test) NO_TEST=1 ;;
+    *) echo "build.sh: unknown arg: $arg (usage: build.sh [--release] [--no-test])" >&2; exit 1 ;;
   esac
 done
 
@@ -80,6 +89,34 @@ case "$PLATFORM" in
     ;;
 esac
 
-echo "==> done ($PROFILE) -> $PLUGIN_DIR"
+echo "==> staged $PROFILE plugin -> $PLUGIN_DIR"
 echo "      objectiveai.json"
 echo "      cli/$(basename "$CLI_ZIP")"
+
+# ── install the objectiveai host binaries (for integration tests) ──────────
+# Skipped with --no-test (the release build only packages the plugin). Delegates
+# to the upstream installer pinned to our objectiveai-sdk version tag; it caches
+# the versioned release zip under .objectiveai/bin and reuses it on re-runs,
+# then unpacks the host binaries into .objectiveai/bin.
+if [ "$NO_TEST" = "0" ]; then
+  OAI_VERSION="$(sed -n -E 's/^objectiveai-sdk = \{ version = "([^"]+)".*/\1/p' Cargo.toml | head -1)"
+  [ -n "$OAI_VERSION" ] \
+    || { echo "build.sh: could not read objectiveai-sdk version from Cargo.toml" >&2; exit 1; }
+  echo "==> installing objectiveai host v$OAI_VERSION into .objectiveai/bin"
+  curl -fsSL "https://raw.githubusercontent.com/ObjectiveAI/objectiveai/v$OAI_VERSION/install.sh" \
+    | bash -s -- --no-export-path --objectiveai-dir "$REPO_ROOT/.objectiveai"
+
+  # ── unpack the mundus-animarum cli_zip in place ──────────────────────────
+  # The staged zip alone isn't runnable; the sandbox needs the binary extracted
+  # into cli/ (the zip stays for the release path).
+  echo "==> unpacking mundus-animarum plugin into the sandbox"
+  case "$PLATFORM" in
+    windows)
+      powershell.exe -NoProfile -Command \
+        "Expand-Archive -Force -LiteralPath '$(cygpath -w "$CLI_ZIP")' -DestinationPath '$(cygpath -w "$CLI_DIR")'"
+      ;;
+    *)
+      unzip -o -q "$CLI_ZIP" -d "$CLI_DIR"
+      ;;
+  esac
+fi

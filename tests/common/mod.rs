@@ -1,7 +1,7 @@
 //! Integration-test harness for mundus-animarum.
 //!
 //! Every test drives the prebuilt `objectiveai` host in the repo's
-//! `.objectiveai/` (populated by `test.sh`) through the SDK
+//! `.objectiveai/` (populated by `build.sh`) through the SDK
 //! [`BinaryExecutor`]. A test gets an isolated state by setting
 //! `OBJECTIVEAI_STATE` to its own name; the host bootstraps a fresh
 //! per-state postgres on first command. Setup, actions, AND assertions
@@ -385,7 +385,6 @@ impl Plugin {
             dangerous_advanced: Some(agents_spawn::RequestDangerousAdvanced {
                 stream: Some(false),
                 seed: Some(42),
-                skip_lock: None,
             }),
             base: Default::default(),
         };
@@ -482,7 +481,6 @@ impl Plugin {
             dangerous_advanced: Some(agents_spawn::RequestDangerousAdvanced {
                 stream: Some(true),
                 seed: Some(42),
-                skip_lock: None,
             }),
             base: Default::default(),
         };
