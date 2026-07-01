@@ -3,6 +3,7 @@
   "name": "mundus-animarum",
   "version": "0.1.1",
   "description": "Persistent souls for ObjectiveAI agents. A key/value store with cross-agent subscriptions and change notifications. Every instance of the same agent definition has a shared soul.",
+  "daemon": true,
   "exec": {
     "windows": ["./mundus-animarum.exe"],
     "linux": ["./mundus-animarum"],

@@ -12,6 +12,7 @@ use crate::error::Error;
 
 pub(crate) mod subscription;
 
+pub mod daemon;
 pub mod delete;
 pub mod get;
 pub mod list;
@@ -50,6 +51,11 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: mcp::Commands,
     },
+    /// Daemon management (`daemon begin` — the shared MCP server).
+    Daemon {
+        #[command(subcommand)]
+        command: daemon::Commands,
+    },
 }
 
 impl Commands {
@@ -63,6 +69,7 @@ impl Commands {
             Commands::Unsubscribe(args) => args.run(ctx).await,
             Commands::Subscriptions(args) => args.run(ctx).await,
             Commands::Mcp { command } => command.run(ctx).await,
+            Commands::Daemon { command } => command.run(ctx).await,
         }
     }
 }
