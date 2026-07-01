@@ -25,7 +25,7 @@ futures = "0.3.32"
 http = "1.4.2"
 # `cli-executor` is a production dependency now: the `mcp mundus-animarum begin`
 # launcher uses `PluginExecutor` + `daemon spawn` to bring up the shared daemon.
-objectiveai-sdk = { version = "2.2.8", default-features = false, features = ["cli", "cli-executor", "mcp", "lockfile"] }
+objectiveai-sdk = { version = "2.2.9", default-features = false, features = ["cli", "cli-executor", "mcp", "lockfile"] }
 rmcp = { version = "0.16.0", features = ["server", "transport-streamable-http-server"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
@@ -38,5 +38,5 @@ tokio-util = "0.7.18"
 # Integration tests drive the installed plugin through the objectiveai host via
 # the SDK's BinaryExecutor (cli-executor — also a normal dep now for the daemon
 # launcher). tokio gains the `process` feature here for BinaryExecutor's spawns.
-objectiveai-sdk = { version = "2.2.8", default-features = false, features = ["cli", "cli-executor", "mcp", "lockfile"] }
+objectiveai-sdk = { version = "2.2.9", default-features = false, features = ["cli", "cli-executor", "mcp", "lockfile"] }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "process"] }
